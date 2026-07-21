@@ -32,12 +32,12 @@ php craft plugin/install formie-beacon-crm
 2. Add the key to your `.env`:
 
    ```
-   BEACON_ACCOUNT_ID=32244
+   BEACON_ACCOUNT_ID=12345
    BEACON_API_KEY=your-secret-key
    ```
 
 3. In Craft, go to **Formie → Settings → CRM** and add a **Beacon** integration.
-4. Set **Account ID** to `$BEACON_ACCOUNT_ID` and **API Key** to `$BEACON_API_KEY`. Your account ID is the number in your Beacon API URL: `https://api.beaconcrm.org/v1/account/32244`.
+4. Set **Account ID** to `$BEACON_ACCOUNT_ID` and **API Key** to `$BEACON_API_KEY`. Your account ID is the number in your Beacon API URL: `https://api.beaconcrm.org/v1/account/12345`.
 5. Save, then hit **Refresh** to verify the connection.
 
 Storing credentials as environment variables keeps the API key out of your project config and out of version control.

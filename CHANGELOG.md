@@ -1,5 +1,10 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.0.3 - 2026-07-21
+
+### Changed
+- Used a generic account ID in the documentation and settings hints, rather than a real one.
+
 ## 1.0.2 - 2026-07-21
 
 ### Changed

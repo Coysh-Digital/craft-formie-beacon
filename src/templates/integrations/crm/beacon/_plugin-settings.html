@@ -7,7 +7,7 @@
 
 {{ macros.proxyField(fieldVariables, 'autosuggestField', {
     label: 'Account ID' | t('formie'),
-    instructions: 'Enter your {name} account ID here. This is the numeric ID in your Beacon API URL, e.g. `32244` in `https://api.beaconcrm.org/v1/account/32244`.' | t('formie', { name: integration.displayName() }),
+    instructions: 'Enter your {name} account ID here. This is the numeric ID in your Beacon API URL, e.g. `12345` in `https://api.beaconcrm.org/v1/account/12345`.' | t('formie', { name: integration.displayName() }),
     name: 'accountId',
     required: true,
     suggestEnvVars: true,

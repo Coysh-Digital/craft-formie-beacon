@@ -48,7 +48,7 @@ field contains `$BEACON_API_KEY` and that the variable is set in the `.env` for
 never added there.
 
 **A 404** usually means the account ID is wrong. It should be just the number,
-such as `32244`, not the full URL.
+such as `12345`, not the full URL.
 
 ## No record types in the list
 

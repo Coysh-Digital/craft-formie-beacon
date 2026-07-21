@@ -18,7 +18,7 @@ Two things to know:
 Your account ID is the number in your Beacon API URL:
 
 ```
-https://api.beaconcrm.org/v1/account/32244
+https://api.beaconcrm.org/v1/account/12345
                                      ^^^^^
 ```
 
@@ -27,7 +27,7 @@ https://api.beaconcrm.org/v1/account/32244
 Add both values to your `.env` file:
 
 ```
-BEACON_ACCOUNT_ID=32244
+BEACON_ACCOUNT_ID=12345
 BEACON_API_KEY=your-secret-key
 ```
 
