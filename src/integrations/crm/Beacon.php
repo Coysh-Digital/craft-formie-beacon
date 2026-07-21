@@ -6,12 +6,14 @@ use Craft;
 use craft\helpers\App;
 use craft\helpers\Json;
 use GuzzleHttp\Client;
+use GuzzleHttp\Exception\RequestException;
 use Throwable;
 use verbb\formie\base\Crm;
 use verbb\formie\base\Integration;
 use verbb\formie\elements\Form;
 use verbb\formie\elements\Submission;
 use verbb\formie\helpers\ArrayHelper;
+use verbb\formie\helpers\StringHelper;
 use verbb\formie\models\IntegrationField;
 use verbb\formie\models\IntegrationFormSettings;
 use verbb\formie\models\Stencil;
@@ -49,6 +51,7 @@ class Beacon extends Crm
     public ?array $fieldMapping = null;
     public bool $useUpsert = false;
     public ?string $primaryFieldKey = null;
+    public ?array $fixedValues = null;
 
 
     // Public Methods
@@ -134,7 +137,15 @@ class Beacon extends Crm
                 return false;
             }
 
-            $values = $this->getFieldMappingValues($submission, $this->fieldMapping, $fields);
+            // Fixed values are merged in first so a mapped form field always
+            // wins if the same Beacon field has both. They go through the same
+            // shaping as mapped values, so a fixed currency or drop-down value
+            // still ends up in the right JSON shape.
+            $values = array_merge(
+                $this->_getFixedValues(),
+                $this->getFieldMappingValues($submission, $this->fieldMapping, $fields)
+            );
+
             $entity = $this->_prepPayload($values, $fields);
 
             if (!$entity) {
@@ -168,7 +179,16 @@ class Beacon extends Crm
                 ];
             }
 
-            $response = $this->deliverPayload($submission, $endpoint, $payload, $method);
+            try {
+                $response = $this->deliverPayload($submission, $endpoint, $payload, $method);
+            } catch (Throwable $e) {
+                // Beacon puts the useful part of a validation failure in a
+                // nested `raw` property that the default handler truncates
+                // away, so unpack it before reporting.
+                $this->_logApiFailure($e, $method, $endpoint, $payload);
+
+                return false;
+            }
 
             if ($response === false) {
                 return true;
@@ -177,13 +197,17 @@ class Beacon extends Crm
             $recordId = $response['entity']['id'] ?? null;
 
             if (!$recordId) {
-                Integration::error($this, Craft::t('formie', 'Missing return “id” {response}. Sent payload {payload}', [
+                Integration::error($this, Craft::t('formie', 'Beacon returned no record ID for {method} {endpoint}. Response: {response} Payload: {payload}', [
+                    'method' => $method,
+                    'endpoint' => $endpoint,
                     'response' => Json::encode($response),
                     'payload' => Json::encode($payload),
                 ]), true);
 
                 return false;
             }
+
+            $this->_logSuccess($response, $method);
         } catch (Throwable $e) {
             Integration::apiError($this, $e);
 
@@ -250,6 +274,99 @@ class Beacon extends Crm
 
     // Private Methods
     // =========================================================================
+
+    /**
+     * Values entered directly in the form settings, sent on every submission.
+     * Blank entries are dropped so an empty box is simply not sent.
+     */
+    private function _getFixedValues(): array
+    {
+        $values = [];
+
+        foreach ($this->fixedValues ?? [] as $handle => $value) {
+            if ($value === null || $value === '' || $value === []) {
+                continue;
+            }
+
+            $values[$handle] = $value;
+        }
+
+        return $values;
+    }
+
+    /**
+     * Reports a failed write with as much detail as Beacon gave us.
+     *
+     * Beacon returns validation problems as a 500 whose body carries the real
+     * cause in `error.raw`, e.g. `Validation error: "emails": 0`. Formie's
+     * default handler shows only the outer message, which is always the
+     * unhelpful "Oh shoot! An unknown error occurred."
+     */
+    private function _logApiFailure(Throwable $e, string $method, string $endpoint, array $payload): void
+    {
+        $status = null;
+        $code = null;
+        $message = $e->getMessage();
+        $raw = null;
+
+        if ($e instanceof RequestException && $e->getResponse()) {
+            $response = $e->getResponse();
+            $status = $response->getStatusCode();
+            $body = (string)$response->getBody();
+
+            try {
+                $decoded = Json::decode($body);
+                $code = $decoded['error']['code'] ?? null;
+                $message = $decoded['error']['message'] ?? $message;
+                $raw = $decoded['error']['raw'] ?? null;
+            } catch (Throwable) {
+                // Not JSON - keep the raw body, trimmed.
+                $raw = StringHelper::safeTruncate($body, 500, '…');
+            }
+        }
+
+        $detail = array_filter([
+            $status ? "HTTP {$status}" : null,
+            $code,
+            $message,
+            $raw ? 'Detail: ' . $raw : null,
+        ]);
+
+        Integration::error($this, Craft::t('formie', 'Beacon rejected {method} {endpoint} for record type “{type}”. {detail} Payload: {payload}', [
+            'method' => $method,
+            'endpoint' => $endpoint,
+            'type' => (string)$this->entityType,
+            'detail' => implode(' | ', $detail),
+            'payload' => Json::encode($payload),
+        ]), true);
+    }
+
+    /**
+     * Records the Beacon ID of every record written, so submissions can be
+     * reconciled against the CRM later.
+     */
+    private function _logSuccess(array $response, string $method): void
+    {
+        $entity = $response['entity'] ?? [];
+        $id = $entity['id'] ?? null;
+
+        // An upsert does not say whether it matched or inserted, but an
+        // untouched record still has its creation timestamp as its last
+        // modification, which is a reliable enough signal for a log line.
+        $action = 'created';
+
+        if ($method === 'PUT') {
+            $created = $entity['created_at'] ?? null;
+            $updated = $entity['updated_at'] ?? null;
+            $action = ($created && $updated && $created !== $updated) ? 'updated' : 'created';
+        }
+
+        Integration::info($this, Craft::t('formie', 'Beacon record {action}: {type} #{id}', [
+            'action' => $action,
+            'type' => (string)$this->entityType,
+            'id' => (string)$id,
+        ]));
+    }
 
     /**
      * Builds the mapping rows for one record type's fields.

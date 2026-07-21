@@ -24,15 +24,17 @@ record type has its own.
 ## Map the fields
 
 **Field Mapping** lists every writable field on the record type you chose, with
-its Beacon label. For each one you can:
+its Beacon label. For each one, pick the form field whose value should be sent,
+or leave it on **Don't Include**.
 
-- Map it to a form field, so the submitted value is sent.
-- Type a fixed value, which is sent on every submission. Useful for things like
-  a **Source** field where you always want "Website contact form".
-- Leave it empty, in which case the field is not included at all.
+You can also map Formie's own submission values, such as the submission ID or
+the site name, from the **Submission** group in the same list.
 
 Only fields you actually map are sent. Empty values are skipped, so a blank
 optional field will not wipe out data already held in Beacon.
+
+To send the same value every time rather than a value from the form, use
+[Fixed values](#fixed-values) below.
 
 ### Drop-down fields
 
@@ -60,6 +62,37 @@ Fields that link to another record, such as **Organisation** or **City**,
 expect the numeric ID of an existing Beacon record. The plugin does not look
 records up by name, so your form has to supply the ID, typically from a hidden
 field or a drop-down whose values are Beacon IDs.
+
+## Fixed values
+
+Sometimes the value you want has nothing to do with what the user typed. A
+**Source** field that should always say "Website", a **Type** that should always
+be "Donor" for this particular form, an interest group everyone on this page
+should be added to.
+
+The **Fixed values** table handles that. It lists the same Beacon fields as the
+mapping table, and whatever you put in a row is sent on every submission from
+this form.
+
+- **Text, number, date and currency fields** give you a text box. Type the value
+  you want.
+- **Drop-down fields** give you a list of that field's configured options, so you
+  cannot accidentally send a value Beacon will reject.
+- **Empty rows are skipped**, so an untouched table changes nothing.
+
+Fixed values are converted to the right shape just like mapped values are, so a
+fixed currency amount of `25.50` is still sent as a proper currency object, and
+a fixed drop-down value is still sent as an array. See
+[How field types are handled](/field-types).
+
+### When a field is both mapped and fixed
+
+The submitted value wins. If someone fills in the mapped form field, that is
+what gets sent; the fixed value is ignored.
+
+This means a fixed value is **not** a default for an empty form field. If you
+want a fallback for when a user leaves something blank, set that up in Formie
+as a default value on the field itself, and map it normally.
 
 ## Only send data when someone consents
 

@@ -6,7 +6,38 @@ Formie records what happened for every submission. Open **Formie → Submissions
 pick the submission, and open its **Integrations** tab. You will see the payload
 that was sent and whatever Beacon said back.
 
-Failures are also written to `storage/logs/formie.log`.
+Everything is also written to `storage/logs/formie.log`.
+
+### What gets logged
+
+Every successful write is logged with the Beacon record ID, so you can reconcile
+a submission against the record it produced:
+
+```
+[INFO] Beacon: Beacon record created: person #516319
+[INFO] Beacon: Beacon record updated: person #516319
+```
+
+Failures are logged with the request, Beacon's error code, and the specific
+validation problem:
+
+```
+[ERROR] Beacon: Beacon rejected PUT entity/person/upsert for record type
+"person". HTTP 500 | server_error | Oh shoot! An unknown error occurred. |
+Detail: Validation error: "gender": 0 Invalid option. Allowed options: Male,
+Female, Non-binary, Prefer not to say Payload: {…}
+```
+
+The **Detail** part is the one worth reading. Beacon returns validation failures
+as a `500` whose top-level message is always the unhelpful "Oh shoot! An unknown
+error occurred", with the real cause buried further down. The plugin digs that
+out and puts it in the log, along with the exact payload that was sent, so you
+can usually see the problem without reproducing it.
+
+::: tip Log entries are prefixed with the integration name
+If you have more than one Beacon integration, the name you gave it appears at
+the start of each line, so you can tell them apart.
+:::
 
 ## The connection check fails
 

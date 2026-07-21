@@ -104,5 +104,59 @@
                 ${ error }
             </li>
         </ul>
+
+        <hr>
+
+        <div class="field">
+            <div class="heading">
+                <label id="fixed-values-label">{{ 'Fixed Values' | t('formie') }}</label>
+
+                <div class="instructions">
+                    <p>{{ 'Send the same value to {name} on every submission, regardless of what the user enters. Useful for fields such as Source, where you always want the same value. Leave a row empty to skip it. If a field is also mapped above, the submitted value wins.' | t('formie', { name: displayName }) }}</p>
+                </div>
+            </div>
+
+            <div class="input ltr">
+                <table class="editable fullwidth">
+                    <thead>
+                        <tr>
+                            <th scope="col" class="singleline-cell textual">{{ '{name} Field' | t('formie', { name: displayName }) }}</th>
+                            <th scope="col" class="textual">{{ 'Fixed Value' | t('formie') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-if="!getSourceFields('entityTypes').length">
+                            <td colspan="2"><div class="zilch">{{ 'Select a record type to see its fields.' | t('formie') }}</div></td>
+                        </tr>
+
+                        <tr v-for="(field, index) in getSourceFields('entityTypes')" :key="index">
+                            <td class="singleline-cell textual" style="width: 50%;">
+                                <span class="fui-table-label">${ field.name }</span>
+                            </td>
+                            <td class="textual" style="width: 50%;">
+                                <div v-if="field.options && field.options.options" class="select small">
+                                    <select
+                                        :name="'fixedValues[' + field.handle + ']'"
+                                        :value="get(form, 'settings.integrations.{{ handle }}.fixedValues.' + field.handle)"
+                                    >
+                                        <option value="">{{ 'No fixed value' | t('formie') }}</option>
+                                        <option v-for="(option, i) in field.options.options" :key="i" :value="option.value">${ option.label }</option>
+                                    </select>
+                                </div>
+
+                                <input
+                                    v-else
+                                    type="text"
+                                    class="text fullwidth"
+                                    autocomplete="off"
+                                    :name="'fixedValues[' + field.handle + ']'"
+                                    :value="get(form, 'settings.integrations.{{ handle }}.fixedValues.' + field.handle)"
+                                >
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </template>
 </integration-form-settings>

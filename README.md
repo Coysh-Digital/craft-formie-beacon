@@ -8,6 +8,8 @@ A [Craft CMS](https://craftcms.com) plugin that adds [Beacon CRM](https://beacon
 - **Any record type.** Map to Person, Organisation, Payment, or any custom record type you've created.
 - **Exact drop-down values.** Options for drop-down fields are read from your account, so you pick from the configured values rather than typing them and hoping.
 - **Create or update.** Optionally upsert on a field of your choice to avoid creating duplicate records from repeat submissions.
+- **Fixed values.** Send a constant value for any field, such as a Source of "Website", without needing a form field for it.
+- **Useful logging.** Successful writes log their Beacon record ID; failures log Beacon's actual validation message rather than its generic error.
 
 ## Requirements
 
@@ -45,6 +47,7 @@ On a form, go to **Integrations → Beacon** and enable it. Then:
 - **Record Type** — which Beacon record to create. The list is read from your account.
 - **Update Existing Records** — when on, the plugin upserts instead of always creating. Pick a **Match On** field that holds a genuinely unique value; `Email` is the usual choice for people. That field must also be mapped.
 - **Field Mapping** — map your form fields to Beacon fields.
+- **Fixed values** — send a constant value for a field on every submission. Drop-downs offer their configured options; everything else takes free text. If a field is both mapped and fixed, the submitted value wins.
 
 Use **Opt-In Field** if you only want to send data when a user consents — typically an Agree field.
 
