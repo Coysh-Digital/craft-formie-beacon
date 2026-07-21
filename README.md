@@ -2,6 +2,8 @@
 
 A [Craft CMS](https://craftcms.com) plugin that adds [Beacon CRM](https://beaconcrm.org) as a CRM integration for [Formie](https://verbb.io/craft-plugins/formie), letting form submissions create or update records in your Beacon database.
 
+📖 **[Read the documentation](https://coysh.digital/plugins/craft-formie-beacon/docs/)**
+
 ## Features
 
 - **Works with any Beacon account.** The plugin reads your account's schema from Beacon's API at runtime, so nothing is hard-coded. Your custom record types and custom `c_*` fields appear in the mapping UI automatically.
@@ -81,6 +83,11 @@ Failed sends are logged with Beacon's own error message. Check **Formie → Subm
 - `invalid_api_key` — the key was revoked or mistyped.
 - A `400` naming a field usually means a drop-down value is not configured in Beacon, or a record link was given something other than a record ID.
 - `429` means you have hit Beacon's rate limit: 300 requests per minute, or 60 for bulk operations.
+
+## Documentation
+
+Full documentation is at
+[coysh.digital/plugins/craft-formie-beacon/docs](https://coysh.digital/plugins/craft-formie-beacon/docs/).
 
 ## License
 
