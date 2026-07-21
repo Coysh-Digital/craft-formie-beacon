@@ -22,7 +22,7 @@
         "email": "support@coysh.digital",
         "issues": "https://github.com/Coysh-Digital/craft-formie-beacon/issues",
         "source": "https://github.com/Coysh-Digital/craft-formie-beacon",
-        "docs": "https://coysh.digital/plugins/formie-beacon-crm/docs/"
+        "docs": "https://coysh.digital/plugins/craft-formie-beacon/docs/"
     },
     "require": {
         "php": ">=8.2",
@@ -43,7 +43,7 @@
         "handle": "formie-beacon-crm",
         "developer": "Coysh Digital",
         "developerUrl": "https://coysh.digital",
-        "documentationUrl": "https://coysh.digital/plugins/formie-beacon-crm/docs/",
+        "documentationUrl": "https://coysh.digital/plugins/craft-formie-beacon/docs/",
         "changelogUrl": "https://raw.githubusercontent.com/Coysh-Digital/craft-formie-beacon/main/CHANGELOG.md",
         "class": "coyshdigital\\formiebeacon\\Plugin"
     },

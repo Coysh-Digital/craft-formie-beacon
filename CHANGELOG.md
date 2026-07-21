@@ -1,6 +1,6 @@
 # Release Notes for Formie Beacon CRM Integration
 
-## 1.0.0 - Unreleased
+## 1.0.0 - 2026-07-21
 
 ### Added
 - Initial release.
