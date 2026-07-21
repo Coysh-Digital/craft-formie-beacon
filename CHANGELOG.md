@@ -1,5 +1,10 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.0.1 - 2026-07-21
+
+### Added
+- Plugin icons, including a monochrome mask for the control panel navigation.
+
 ## 1.0.0 - 2026-07-21
 
 ### Added
