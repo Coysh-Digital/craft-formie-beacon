@@ -1,5 +1,10 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.0.2 - 2026-07-21
+
+### Changed
+- Replaced the plugin icon with the Fusion torch mark, recoloured for the plugin.
+
 ## 1.0.1 - 2026-07-21
 
 ### Added
