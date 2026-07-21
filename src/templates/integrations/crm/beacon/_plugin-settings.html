@@ -1,0 +1,30 @@
+{% extends 'formie/_layouts/integrations/plugin-settings' %}
+
+{% import '_includes/forms' as forms %}
+{% import 'verbb-base/_macros' as macros %}
+
+{% block content %}
+
+{{ macros.proxyField(fieldVariables, 'autosuggestField', {
+    label: 'Account ID' | t('formie'),
+    instructions: 'Enter your {name} account ID here. This is the numeric ID in your Beacon API URL, e.g. `32244` in `https://api.beaconcrm.org/v1/account/32244`.' | t('formie', { name: integration.displayName() }),
+    name: 'accountId',
+    required: true,
+    suggestEnvVars: true,
+    value: integration.settings.accountId ?? '',
+    warning: macros.configWarning('accountId', 'formie'),
+    errors: integration.getErrors('accountId'),
+}) }}
+
+{{ macros.proxyField(fieldVariables, 'autosuggestField', {
+    label: 'API Key' | t('formie'),
+    instructions: 'Enter your {name} API key here. Create one in Beacon under Settings → API keys. Storing this in an environment variable is strongly recommended.' | t('formie', { name: integration.displayName() }),
+    name: 'apiKey',
+    required: true,
+    suggestEnvVars: true,
+    value: integration.settings.apiKey ?? '',
+    warning: macros.configWarning('apiKey', 'formie'),
+    errors: integration.getErrors('apiKey'),
+}) }}
+
+{% endblock %}

@@ -1,0 +1,65 @@
+{
+    "name": "coyshdigital/craft-formie-beacon",
+    "description": "Beacon CRM integration for Formie - send Craft CMS form submissions to any record type in your Beacon database.",
+    "type": "craft-plugin",
+    "license": "mit",
+    "keywords": [
+        "craft",
+        "craftcms",
+        "craft-plugin",
+        "formie",
+        "beacon",
+        "beacon crm",
+        "crm"
+    ],
+    "authors": [
+        {
+            "name": "Coysh Digital",
+            "homepage": "https://coysh.digital"
+        }
+    ],
+    "support": {
+        "email": "support@coysh.digital",
+        "issues": "https://github.com/Coysh-Digital/craft-formie-beacon/issues",
+        "source": "https://github.com/Coysh-Digital/craft-formie-beacon",
+        "docs": "https://coysh.digital/plugins/formie-beacon-crm/docs/"
+    },
+    "require": {
+        "php": ">=8.2",
+        "craftcms/cms": "^5.0.0",
+        "verbb/formie": "^3.0"
+    },
+    "require-dev": {
+        "craftcms/ecs": "dev-main",
+        "craftcms/phpstan": "dev-main"
+    },
+    "autoload": {
+        "psr-4": {
+            "coyshdigital\\formiebeacon\\": "src/"
+        }
+    },
+    "extra": {
+        "name": "Formie Beacon CRM",
+        "handle": "formie-beacon-crm",
+        "developer": "Coysh Digital",
+        "developerUrl": "https://coysh.digital",
+        "documentationUrl": "https://coysh.digital/plugins/formie-beacon-crm/docs/",
+        "changelogUrl": "https://raw.githubusercontent.com/Coysh-Digital/craft-formie-beacon/main/CHANGELOG.md",
+        "class": "coyshdigital\\formiebeacon\\Plugin"
+    },
+    "scripts": {
+        "check-cs": "ecs check --ansi",
+        "fix-cs": "ecs check --ansi --fix",
+        "phpstan": "phpstan --memory-limit=1G"
+    },
+    "config": {
+        "sort-packages": true,
+        "platform": {
+            "php": "8.2"
+        },
+        "allow-plugins": {
+            "yiisoft/yii2-composer": true,
+            "craftcms/plugin-installer": true
+        }
+    }
+}
