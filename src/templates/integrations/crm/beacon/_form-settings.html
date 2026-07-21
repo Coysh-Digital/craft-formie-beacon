@@ -1,0 +1,108 @@
+{% import '_includes/forms' as forms %}
+{% import 'verbb-base/_macros' as macros %}
+
+{% set handle = integration.handle %}
+{% set displayName = integration.displayName() %}
+{% set formSettings = integration.getFormSettings().getSettings() %}
+{% set entityType = form.settings.integrations[handle].entityType ?? '' %}
+{% set useUpsert = form.settings.integrations[handle].useUpsert ?? '' %}
+
+<field-select
+    label="{{ 'Opt-In Field' | t('formie') }}"
+    instructions="{{ 'Choose a field to opt-in to {name}. For example, you might only wish to record user data if they provide a value for a field of your choice - commonly, an Agree field.' | t('formie', { name: displayName }) }}"
+    id="opt-in-field"
+    name="optInField"
+    :value="get(form, 'settings.integrations.{{ handle }}.optInField')"
+></field-select>
+
+<hr>
+
+<integration-form-settings handle="{{ handle }}" :form-settings="{{ formSettings | json_encode }}" source="{{ entityType }}">
+    <template v-slot="{ get, isEmpty, input, settings, sourceId, loading, refresh, error, errorMessage, getSourceFields }">
+        <div class="field">
+            <div class="heading">
+                <label id="sourceId-label" for="sourceId" class="required">{{ 'Record Type' | t('formie') }}</label>
+
+                <div class="instructions">
+                    <p>{{ 'Select the {name} record type to create. This list is read from your account, so custom record types appear here too.' | t('formie', { name: displayName }) }}</p>
+                </div>
+            </div>
+
+            <div class="input ltr">
+                <div class="select">
+                    <select :value="sourceId" @input="input('sourceId', $event.target.value)" name="entityType" required>
+                        <option value="">{{ 'Select an option' | t('formie') }}</option>
+
+                        <option v-for="(option, index) in get(settings, 'entityTypes')" :key="index" :value="option.id">${ option.name }</option>
+                    </select>
+                </div>
+
+                <button class="btn fui-btn-transparent" :class="{ 'fui-loading fui-loading-sm': loading }" data-icon="refresh" @click.prevent="refresh"></button>
+            </div>
+
+            <ul v-if="!isEmpty(get(form, 'settings.integrations.{{ handle }}.errors.entityType'))" class="errors" v-cloak>
+                <li v-for="(error, index) in get(form, 'settings.integrations.{{ handle }}.errors.entityType')" :key="index">
+                    ${ error }
+                </li>
+            </ul>
+        </div>
+
+        <div v-if="error" class="error" style="margin-top: 10px;" v-cloak>
+            <span data-icon="alert"></span>
+            <span v-html="errorMessage"></span>
+        </div>
+
+        {{ forms.lightswitchField({
+            label: 'Update Existing Records' | t('formie'),
+            instructions: 'Whether to update an existing record when one already matches, instead of always creating a new one. Recommended for public forms, to avoid creating duplicates.' | t('formie'),
+            id: 'useUpsert',
+            name: 'useUpsert',
+            on: useUpsert,
+            toggle: 'use-upsert',
+        }) }}
+
+        <div id="use-upsert" class="{{ not useUpsert ? 'hidden' }}">
+            <div class="field">
+                <div class="heading">
+                    <label id="primaryFieldKey-label" for="primaryFieldKey">{{ 'Match On Field' | t('formie') }}</label>
+
+                    <div class="instructions">
+                        <p>{{ 'The field used to find an existing record. It must also be mapped below, and should hold a genuinely unique value in your database.' | t('formie') }}</p>
+                    </div>
+                </div>
+
+                <div class="input ltr">
+                    <div class="select">
+                        <select :value="get(form, 'settings.integrations.{{ handle }}.primaryFieldKey')" @input="input('primaryFieldKey', $event.target.value)" name="primaryFieldKey">
+                            <option value="">{{ 'Select an option' | t('formie') }}</option>
+
+                            <option v-for="(field, index) in getSourceFields('entityTypes')" :key="index" :value="field.handle">${ field.name }</option>
+                        </select>
+                    </div>
+                </div>
+
+                <ul v-if="!isEmpty(get(form, 'settings.integrations.{{ handle }}.errors.primaryFieldKey'))" class="errors" v-cloak>
+                    <li v-for="(error, index) in get(form, 'settings.integrations.{{ handle }}.errors.primaryFieldKey')" :key="index">
+                        ${ error }
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <integration-field-mapping
+            label="{{ 'Field Mapping' | t('formie') }}"
+            instructions="{{ 'Choose how your form fields should map to your {name} fields.' | t('formie', { name: displayName }) }}"
+            name-label="{{ displayName }}"
+            id="field-mapping"
+            name="fieldMapping"
+            :value="get(form, 'settings.integrations.{{ handle }}.fieldMapping')"
+            :rows="getSourceFields('entityTypes')"
+        ></integration-field-mapping>
+
+        <ul v-if="!isEmpty(get(form, 'settings.integrations.{{ handle }}.errors.fieldMapping'))" class="errors" v-cloak>
+            <li v-for="(error, index) in get(form, 'settings.integrations.{{ handle }}.errors.fieldMapping')" :key="index">
+                ${ error }
+            </li>
+        </ul>
+    </template>
+</integration-form-settings>
