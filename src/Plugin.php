@@ -9,11 +9,12 @@ use verbb\formie\events\RegisterIntegrationsEvent;
 use verbb\formie\services\Integrations;
 
 /**
- * Formie Beacon CRM Integration plugin
+ * Formie Beacon CRM plugin for Craft CMS 5.x
+ *
+ * @link      https://coysh.digital
+ * @copyright Copyright (c) Coysh Digital
  *
  * @method static Plugin getInstance()
- * @author Coysh Digital <support@coysh.digital>
- * @license MIT
  */
 class Plugin extends BasePlugin
 {
