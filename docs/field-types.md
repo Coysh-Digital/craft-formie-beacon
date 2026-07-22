@@ -5,6 +5,11 @@ about them. The plugin converts your mapped values into the right shape so you
 do not have to think about it. This page documents what it does, which is
 useful when a value is not saving the way you expect.
 
+The conversions themselves live in
+[coyshdigital/beaconcrm-php](https://github.com/Coysh-Digital/beaconcrm-php),
+the Beacon API library the plugin is built on, so they behave identically
+anywhere else you use it.
+
 ## Conversions
 
 | Beacon field type | What gets sent |

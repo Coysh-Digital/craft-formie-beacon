@@ -26,6 +26,7 @@
     },
     "require": {
         "php": ">=8.2",
+        "coyshdigital/beaconcrm-php": "^1.0",
         "craftcms/cms": "^5.0.0",
         "verbb/formie": "^3.0"
     },

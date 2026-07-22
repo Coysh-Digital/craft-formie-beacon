@@ -2,3 +2,9 @@
 composer.lock
 /.idea
 .DS_Store
+.env
+
+# Local development environment: a throwaway Craft install used to test the
+# plugin against a real Beacon account. Not part of the plugin.
+/.ddev
+/dev

@@ -5,6 +5,15 @@ namespace coyshdigital\formiebeacon\integrations\crm;
 use Craft;
 use craft\helpers\App;
 use craft\helpers\Json;
+use CoyshDigital\Beacon\Config as BeaconConfig;
+use CoyshDigital\Beacon\Exception\ApiException;
+use CoyshDigital\Beacon\Http\ErrorParser;
+use CoyshDigital\Beacon\Payload\EntityPayload;
+use CoyshDigital\Beacon\Resource\Entities;
+use CoyshDigital\Beacon\Resource\EntityTypes;
+use CoyshDigital\Beacon\Schema\EntityType;
+use CoyshDigital\Beacon\Schema\Field as BeaconField;
+use CoyshDigital\Beacon\Schema\FieldType;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
 use Throwable;
@@ -13,26 +22,22 @@ use verbb\formie\base\Integration;
 use verbb\formie\elements\Form;
 use verbb\formie\elements\Submission;
 use verbb\formie\helpers\ArrayHelper;
-use verbb\formie\helpers\StringHelper;
 use verbb\formie\models\IntegrationField;
 use verbb\formie\models\IntegrationFormSettings;
 use verbb\formie\models\Stencil;
 
+/**
+ * Sends Formie submissions to Beacon CRM.
+ *
+ * Everything Beacon-specific — reading the account schema, deciding which
+ * fields can be written, shaping values into the JSON Beacon expects, and
+ * unpacking its errors — lives in the coyshdigital/beaconcrm-php library, which
+ * is shared with other projects. This class is the Formie half: the mapping UI,
+ * the settings, and the sending, which stays with Formie so its payload events,
+ * proxy settings and per-submission logging keep working.
+ */
 class Beacon extends Crm
 {
-    // Constants
-    // =========================================================================
-
-    /**
-     * Beacon field types that cannot be written through a plain entity payload.
-     *
-     * `file` needs Beacon's signed-upload handshake, `user` refers to Beacon
-     * user accounts rather than form data, and `location` expects a structured
-     * address object that a single mapped form field cannot express.
-     */
-    public const UNSUPPORTED_FIELD_TYPES = ['file', 'user', 'location'];
-
-
     // Static Methods
     // =========================================================================
 
@@ -93,27 +98,17 @@ class Beacon extends Crm
         $settings = [];
 
         try {
-            $response = $this->request('GET', 'entity_types');
-            $entityTypes = $response['results'] ?? [];
+            $response = $this->request('GET', EntityTypes::ENDPOINT);
 
-            foreach ($entityTypes as $entityType) {
-                $key = $entityType['key'] ?? null;
-
-                if (!$key) {
-                    continue;
-                }
-
+            // The library parses the schema and sorts the record types by
+            // label; Beacon returns them in an arbitrary order that puts custom
+            // types before Person.
+            foreach (EntityType::listFromResponse($response) as $entityType) {
                 $settings['entityTypes'][] = [
-                    'id' => $key,
-                    'name' => $entityType['label'] ?? $key,
-                    'fields' => $this->_getFields($entityType['fields'] ?? []),
+                    'id' => $entityType->key,
+                    'name' => $entityType->label,
+                    'fields' => $this->_getFields($entityType),
                 ];
-            }
-
-            // Present record types alphabetically — Beacon returns them in an
-            // arbitrary order that puts custom types before Person.
-            if (!empty($settings['entityTypes'])) {
-                usort($settings['entityTypes'], fn($a, $b) => strcasecmp($a['name'], $b['name']));
             }
         } catch (Throwable $e) {
             Integration::apiError($this, $e);
@@ -146,9 +141,9 @@ class Beacon extends Crm
                 $this->getFieldMappingValues($submission, $this->fieldMapping, $fields)
             );
 
-            $entity = $this->_prepPayload($values, $fields);
+            $entity = $this->_buildPayload($values, $fields);
 
-            if (!$entity) {
+            if ($entity->isEmpty()) {
                 Integration::error($this, Craft::t('formie', 'No mapped values to send to {name}.', [
                     'name' => static::displayName(),
                 ]), true);
@@ -156,28 +151,27 @@ class Beacon extends Crm
                 return true;
             }
 
-            $endpoint = 'entity/' . $this->entityType;
-            $method = 'POST';
-            $payload = $entity;
+            // Beacon matches an existing record on `primary_field_key`, so that
+            // key must also carry a value in the entity body itself.
+            if ($this->useUpsert && $this->primaryFieldKey && !$entity->hasField($this->primaryFieldKey)) {
+                Integration::error($this, Craft::t('formie', 'Upsert key “{key}” is not mapped, so no record can be matched. Map it or disable upsert.', [
+                    'key' => $this->primaryFieldKey,
+                ]), true);
 
-            if ($this->useUpsert && $this->primaryFieldKey) {
-                // Beacon matches an existing record on `primary_field_key`, so
-                // that key must also be present in the entity body itself.
-                if (!array_key_exists($this->primaryFieldKey, $entity)) {
-                    Integration::error($this, Craft::t('formie', 'Upsert key “{key}” is not mapped, so no record can be matched. Map it or disable upsert.', [
-                        'key' => $this->primaryFieldKey,
-                    ]), true);
-
-                    return false;
-                }
-
-                $endpoint .= '/upsert';
-                $method = 'PUT';
-                $payload = [
-                    'primary_field_key' => $this->primaryFieldKey,
-                    'entity' => $entity,
-                ];
+                return false;
             }
+
+            $entities = Entities::describe((string)$this->entityType);
+
+            // The library describes the request; Formie sends it, so its payload
+            // events, proxy settings and submission logging all still apply.
+            $request = $this->useUpsert && $this->primaryFieldKey
+                ? $entities->upsertRequest($this->primaryFieldKey, $entity)
+                : $entities->createRequest($entity);
+
+            $method = $request->method;
+            $endpoint = $request->path;
+            $payload = $request->body ?? [];
 
             try {
                 $response = $this->deliverPayload($submission, $endpoint, $payload, $method);
@@ -220,7 +214,7 @@ class Beacon extends Crm
     public function fetchConnection(): bool
     {
         try {
-            $this->request('GET', 'entity_types');
+            $this->request('GET', EntityTypes::ENDPOINT);
         } catch (Throwable $e) {
             Integration::apiError($this, $e);
 
@@ -234,17 +228,22 @@ class Beacon extends Crm
     // Protected Methods
     // =========================================================================
 
+    /**
+     * Formie does the sending, so it needs its own client — but the base URI
+     * and headers come from the library's Config, which is the single place
+     * they are defined. Beacon rejects a request missing the
+     * `Beacon-Application` header as though the key itself were invalid.
+     */
     protected function defineClient(): Client
     {
-        $accountId = App::parseEnv($this->accountId);
+        $config = new BeaconConfig(
+            (string)App::parseEnv($this->accountId),
+            (string)App::parseEnv($this->apiKey),
+        );
 
         return Craft::createGuzzleClient([
-            'base_uri' => "https://api.beaconcrm.org/v1/account/{$accountId}/",
-            'headers' => [
-                'Content-Type' => 'application/json',
-                'Beacon-Application' => 'developer_api',
-                'Authorization' => 'Bearer ' . App::parseEnv($this->apiKey),
-            ],
+            'base_uri' => $config->accountUri(),
+            'headers' => $config->headers(),
         ]);
     }
 
@@ -304,39 +303,19 @@ class Beacon extends Crm
      */
     private function _logApiFailure(Throwable $e, string $method, string $endpoint, array $payload): void
     {
-        $status = null;
-        $code = null;
-        $message = $e->getMessage();
-        $raw = null;
+        $detail = $e->getMessage();
 
         if ($e instanceof RequestException && $e->getResponse()) {
-            $response = $e->getResponse();
-            $status = $response->getStatusCode();
-            $body = (string)$response->getBody();
-
-            try {
-                $decoded = Json::decode($body);
-                $code = $decoded['error']['code'] ?? null;
-                $message = $decoded['error']['message'] ?? $message;
-                $raw = $decoded['error']['raw'] ?? null;
-            } catch (Throwable) {
-                // Not JSON - keep the raw body, trimmed.
-                $raw = StringHelper::safeTruncate($body, 500, '…');
-            }
+            $detail = ErrorParser::fromResponse($e->getResponse(), $method, $endpoint)->getSummary();
+        } elseif ($e instanceof ApiException) {
+            $detail = $e->getSummary();
         }
-
-        $detail = array_filter([
-            $status ? "HTTP {$status}" : null,
-            $code,
-            $message,
-            $raw ? 'Detail: ' . $raw : null,
-        ]);
 
         Integration::error($this, Craft::t('formie', 'Beacon rejected {method} {endpoint} for record type “{type}”. {detail} Payload: {payload}', [
             'method' => $method,
             'endpoint' => $endpoint,
             'type' => (string)$this->entityType,
-            'detail' => implode(' | ', $detail),
+            'detail' => $detail,
             'payload' => Json::encode($payload),
         ]), true);
     }
@@ -369,39 +348,26 @@ class Beacon extends Crm
     }
 
     /**
-     * Builds the mapping rows for one record type's fields.
+     * Builds the mapping rows for one record type.
+     *
+     * The library decides what can be written — read-only, smart and rollup
+     * fields are computed by Beacon and rejected on write, and file, user and
+     * location fields need more than a single mapped value can carry.
      */
-    private function _getFields(array $fields): array
+    private function _getFields(EntityType $entityType): array
     {
         $integrationFields = [];
 
-        foreach ($fields as $field) {
-            $key = $field['key'] ?? null;
-            $type = $field['type'] ?? null;
-
-            if (!$key || !$type) {
-                continue;
-            }
-
-            // Smart fields, rollups and auto-increments are computed by Beacon
-            // and rejected on write.
-            if (($field['is_read_only'] ?? false) || ($field['is_smart_field'] ?? false) || ($field['is_rollup_field'] ?? false)) {
-                continue;
-            }
-
-            if (in_array($type, self::UNSUPPORTED_FIELD_TYPES, true)) {
-                continue;
-            }
-
+        foreach ($entityType->mappableFields() as $field) {
             // A person name is a structured object, so expose one mapping row
             // per name part and reassemble it when sending.
-            if ($type === 'person_name') {
-                foreach (['full', 'first', 'last', 'middle', 'prefix'] as $part) {
+            if ($field->isPersonName()) {
+                foreach (BeaconField::NAME_PARTS as $part) {
                     $integrationFields[] = new IntegrationField([
-                        'handle' => $key . ':' . $part,
-                        'name' => ($field['label'] ?? $key) . ' (' . ucfirst($part) . ')',
+                        'handle' => $field->key . BeaconField::PART_SEPARATOR . $part,
+                        'name' => $field->label . ' (' . ucfirst($part) . ')',
                         'type' => IntegrationField::TYPE_STRING,
-                        'sourceType' => $type,
+                        'sourceType' => $field->rawType,
                     ]);
                 }
 
@@ -409,10 +375,10 @@ class Beacon extends Crm
             }
 
             $integrationFields[] = new IntegrationField([
-                'handle' => $key,
-                'name' => $field['label'] ?? $key,
+                'handle' => $field->key,
+                'name' => $field->label,
                 'type' => $this->_convertFieldType($field),
-                'sourceType' => $type,
+                'sourceType' => $field->rawType,
                 'options' => $this->_getFieldOptions($field),
             ]);
         }
@@ -420,19 +386,19 @@ class Beacon extends Crm
         return $integrationFields;
     }
 
-    private function _convertFieldType(array $field): string
+    /**
+     * Maps a Beacon field type onto the Formie type that drives the mapping UI.
+     */
+    private function _convertFieldType(BeaconField $field): string
     {
-        $type = $field['type'] ?? '';
-        $metadata = $field['metadata'] ?? [];
-
-        return match ($type) {
-            'number', 'rating' => IntegrationField::TYPE_NUMBER,
-            'currency', 'percent' => IntegrationField::TYPE_FLOAT,
-            'boolean' => IntegrationField::TYPE_BOOLEAN,
-            'date' => ($metadata['include_time'] ?? false) ? IntegrationField::TYPE_DATETIME : IntegrationField::TYPE_DATE,
-            'phone' => IntegrationField::TYPE_PHONE,
-            'reference' => IntegrationField::TYPE_ARRAY,
-            'select' => ($metadata['allow_multiple'] ?? false) ? IntegrationField::TYPE_ARRAY : IntegrationField::TYPE_STRING,
+        return match ($field->type) {
+            FieldType::Number, FieldType::Rating => IntegrationField::TYPE_NUMBER,
+            FieldType::Currency, FieldType::Percent => IntegrationField::TYPE_FLOAT,
+            FieldType::Boolean => IntegrationField::TYPE_BOOLEAN,
+            FieldType::Date => $field->includesTime() ? IntegrationField::TYPE_DATETIME : IntegrationField::TYPE_DATE,
+            FieldType::Phone => IntegrationField::TYPE_PHONE,
+            FieldType::Reference => IntegrationField::TYPE_ARRAY,
+            FieldType::Select => $field->allowsMultiple() ? IntegrationField::TYPE_ARRAY : IntegrationField::TYPE_STRING,
             default => IntegrationField::TYPE_STRING,
         };
     }
@@ -442,20 +408,16 @@ class Beacon extends Crm
      * mapping UI rather than typed by hand. Beacon rejects any value that is
      * not configured for the field.
      */
-    private function _getFieldOptions(array $field): array
+    private function _getFieldOptions(BeaconField $field): array
     {
-        if (($field['type'] ?? '') !== 'select') {
-            return [];
-        }
-
-        $options = $field['metadata']['options'] ?? [];
+        $options = $field->options();
 
         if (!$options) {
             return [];
         }
 
         return [
-            'label' => $field['label'] ?? '',
+            'label' => $field->label,
             'options' => array_map(fn($option) => [
                 'label' => $option,
                 'value' => $option,
@@ -506,78 +468,22 @@ class Beacon extends Crm
     }
 
     /**
-     * Turns flat mapped values into the shapes Beacon expects: names become
-     * objects, emails and phones become arrays of objects, drop-downs and
-     * record links become arrays, and numeric fields become JSON numbers.
+     * Turns flat mapped values into an entity payload.
+     *
+     * The library shapes each value for its Beacon field type — names become
+     * objects, emails and phones become arrays of objects, drop-downs and record
+     * links become arrays, currency becomes an object, and numeric fields become
+     * JSON numbers. The Beacon type of each field comes from the `sourceType`
+     * stored on the mapping row, so no schema call is needed to send.
      */
-    private function _prepPayload(array $values, array $fieldDefs): array
+    private function _buildPayload(array $values, array $fieldDefs): EntityPayload
     {
         $fields = ArrayHelper::index($fieldDefs, 'handle');
-        $payload = [];
-        $names = [];
 
-        foreach ($values as $handle => $value) {
-            if ($value === null || $value === '') {
-                continue;
-            }
-
-            // Person-name parts are collected and merged into one object below.
-            if (str_contains($handle, ':')) {
-                [$key, $part] = explode(':', $handle, 2);
-                $names[$key][$part] = $value;
-
-                continue;
-            }
-
-            $field = $fields[$handle] ?? null;
-            $sourceType = $field->sourceType ?? 'string';
-
-            $payload[$handle] = match ($sourceType) {
-                'email' => [['email' => $value, 'is_primary' => true]],
-                'phone' => [['number' => (string)$value, 'is_primary' => true]],
-                'boolean' => (bool)$value,
-                // Currency is the one numeric type Beacon wants as an object.
-                // A bare number is accepted with a 200 but silently stored as
-                // null, so the amount would be lost without this. The currency
-                // code is omitted deliberately: Beacon fills in the account
-                // default. Amounts are major units (25.5 means £25.50).
-                'currency' => ['value' => (float)$value],
-                // Number, percent and rating all reject the object form.
-                // `+ 0` keeps whole numbers as ints and decimals as floats,
-                // respecting each field's configured decimal places.
-                'number', 'rating', 'percent' => is_numeric($value) ? $value + 0 : $value,
-                // Drop-downs are arrays in Beacon even when single-select.
-                'select' => array_values(array_filter((array)$value, fn($v) => $v !== null && $v !== '')),
-                // Record links are arrays of integer Beacon record IDs.
-                'reference' => array_values(array_map('intval', array_filter((array)$value))),
-                default => $value,
-            };
-        }
-
-        foreach ($names as $key => $parts) {
-            // Beacon shows `full` throughout its UI, so derive it when only the
-            // individual parts have been mapped.
-            if (empty($parts['full'])) {
-                $derived = trim(implode(' ', array_filter([
-                    $parts['first'] ?? null,
-                    $parts['middle'] ?? null,
-                    $parts['last'] ?? null,
-                ])));
-
-                if ($derived) {
-                    $parts['full'] = $derived;
-                }
-            }
-
-            $payload[$key] = array_merge([
-                'full' => null,
-                'first' => null,
-                'last' => null,
-                'middle' => null,
-                'prefix' => null,
-            ], $parts);
-        }
-
-        return $payload;
+        // Person-name parts are assembled by the payload builder rather than
+        // shaped individually, so the resolver only ever sees a whole field.
+        return EntityPayload::resolvedBy(
+            static fn(string $key): ?FieldType => FieldType::tryFromName($fields[$key]->sourceType ?? null),
+        )->setMany($values);
     }
 }

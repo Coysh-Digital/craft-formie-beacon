@@ -1,5 +1,15 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.1.0 - 2026-07-22
+
+### Added
+- Dependency on [coyshdigital/beaconcrm-php](https://github.com/Coysh-Digital/beaconcrm-php) 1.0, a standalone Beacon CRM library that Composer installs alongside the plugin. Use it directly if you need to talk to Beacon from elsewhere in your project.
+
+### Changed
+- Moved all Beacon API work into that library: reading the account schema, deciding which fields can be written, shaping values into the JSON Beacon expects, and unpacking its errors. Formie still sends the requests, so integration logging, payload events and test mode behave exactly as before.
+- An upsert can now match on a person-name field mapped only through its parts, rather than requiring the whole field.
+- A mapped value that is an empty array is now skipped, like other empty values, instead of being sent and potentially clearing the field.
+
 ## 1.0.3 - 2026-07-21
 
 ### Changed
