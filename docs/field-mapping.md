@@ -111,6 +111,7 @@ until you refresh.
 
 ::: tip Fields that are missing on purpose
 Some Beacon fields never appear in the mapping list, including file uploads,
-addresses, and any field Beacon calculates for itself. See
+Beacon users, and any field Beacon calculates for itself. Person names and
+addresses do appear, but one part at a time. See
 [How field types are handled](/field-types) for the full list and the reasons.
 :::

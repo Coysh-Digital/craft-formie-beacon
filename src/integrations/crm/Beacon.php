@@ -351,21 +351,26 @@ class Beacon extends Crm
      * Builds the mapping rows for one record type.
      *
      * The library decides what can be written — read-only, smart and rollup
-     * fields are computed by Beacon and rejected on write, and file, user and
-     * location fields need more than a single mapped value can carry.
+     * fields are computed by Beacon and rejected on write, and file and user
+     * fields need more than a single mapped value can carry.
      */
     private function _getFields(EntityType $entityType): array
     {
         $integrationFields = [];
 
         foreach ($entityType->mappableFields() as $field) {
-            // A person name is a structured object, so expose one mapping row
-            // per name part and reassemble it when sending.
-            if ($field->isPersonName()) {
-                foreach (BeaconField::NAME_PARTS as $part) {
+            // Person names and addresses are structured objects, so expose one
+            // mapping row per part and reassemble them when sending. A single
+            // row would be worse than useless: Formie casts a mapped value to
+            // its row's type, and an address cast to a string is the literal
+            // "Array".
+            $parts = $field->parts();
+
+            if ($parts !== []) {
+                foreach ($parts as $part) {
                     $integrationFields[] = new IntegrationField([
                         'handle' => $field->key . BeaconField::PART_SEPARATOR . $part,
-                        'name' => $field->label . ' (' . ucfirst($part) . ')',
+                        'name' => $field->label . ' (' . ucfirst(str_replace('_', ' ', $part)) . ')',
                         'type' => IntegrationField::TYPE_STRING,
                         'sourceType' => $field->rawType,
                     ]);
@@ -471,17 +476,19 @@ class Beacon extends Crm
      * Turns flat mapped values into an entity payload.
      *
      * The library shapes each value for its Beacon field type — names become
-     * objects, emails and phones become arrays of objects, drop-downs and record
-     * links become arrays, currency becomes an object, and numeric fields become
-     * JSON numbers. The Beacon type of each field comes from the `sourceType`
-     * stored on the mapping row, so no schema call is needed to send.
+     * objects, emails, phones and addresses become arrays of objects, drop-downs
+     * and record links become arrays, currency becomes an object, and numeric
+     * fields become JSON numbers. The Beacon type of each field comes from the
+     * `sourceType` stored on the mapping row, so no schema call is needed to
+     * send.
      */
     private function _buildPayload(array $values, array $fieldDefs): EntityPayload
     {
         $fields = ArrayHelper::index($fieldDefs, 'handle');
 
-        // Person-name parts are assembled by the payload builder rather than
-        // shaped individually, so the resolver only ever sees a whole field.
+        // Structured fields are assembled by the payload builder from their
+        // parts, and the rows are keyed by part handle — `address:city` — so
+        // the resolver is asked about those rather than the whole field.
         return EntityPayload::resolvedBy(
             static fn(string $key): ?FieldType => FieldType::tryFromName($fields[$key]->sourceType ?? null),
         )->setMany($values);

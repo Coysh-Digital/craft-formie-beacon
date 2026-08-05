@@ -60,9 +60,13 @@ access. API access depends on your Beacon plan.
 
 ## A field is missing from the mapping list
 
-Most likely it is a file upload, an address, or a field Beacon calculates for
+Most likely it is a file upload, a Beacon user, or a field Beacon calculates for
 itself. These are excluded on purpose, and
 [How field types are handled](/field-types) explains why.
+
+If you are looking for an address, it is there but split into parts —
+**Address (City)**, **Address (Postal code)** and so on — so search for the part
+you want rather than the field name on its own.
 
 Otherwise, click **Refresh Integration**. The schema is stored after it is first
 read, so fields added in Beacon since then will not appear until you refresh.

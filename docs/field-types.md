@@ -18,6 +18,7 @@ anywhere else you use it.
 | Person name | An object of name parts, with `full` derived if you only mapped the parts |
 | Email | `[{ "email": "…", "is_primary": true }]` |
 | Phone | `[{ "number": "…", "is_primary": true }]` |
+| Location | `[{ "address_line_one": "…", "is_primary": true }]`, **a list even for single-address fields** |
 | Drop-down | An array of values, **even for single-select fields** |
 | Record link | An array of integer Beacon record IDs |
 | Checkbox | A JSON boolean |
@@ -46,6 +47,28 @@ anywhere. The plugin always sends the object form so this cannot happen, but it
 is worth knowing if you are writing to the Beacon API from anywhere else.
 :::
 
+## Addresses
+
+An address is a contact point in Beacon, exactly like an email or a phone
+number, so it is sent as a **list** of address objects even where the field
+holds only one.
+
+Like person names, address fields appear in the mapping list one part at a
+time — **Address (City)**, **Address (Postal code)** and so on — and the parts
+are reassembled into a single address when the submission is sent. Map as few or
+as many as your form collects.
+
+The mappable parts are address line one, two and three, city, region, postal
+code, country, country code and notes. Beacon fills in the country from the
+country code and vice versa, and geocodes the latitude and longitude itself.
+
+::: tip One address per submission
+Mapping fills in the record's first address. A record that needs several has to
+be written through the API directly. Note also that a write replaces the whole
+address list rather than adding to it, so submitting a form against an existing
+record will overwrite an address already held.
+:::
+
 ## Fields you will not see in the mapping list
 
 Some fields are deliberately left out, because mapping them could not work.
@@ -54,9 +77,6 @@ Some fields are deliberately left out, because mapping them could not work.
 cannot happen inside the record payload. Mapping a Formie file field to one
 would always fail, so upload fields are hidden. This affects **Attachments**
 and any custom file field.
-
-**Addresses and locations.** Beacon expects a structured address object that a
-single mapped form field cannot express.
 
 **Anything Beacon calculates.** Smart fields, rollup fields and auto-increment
 fields are all computed by Beacon and rejected on write. This covers a lot of

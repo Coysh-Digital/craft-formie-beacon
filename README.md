@@ -83,8 +83,8 @@ and are sent.
 ## Known limitations
 
 - **File upload fields are not supported.** Beacon requires a separate signed-upload handshake that cannot be performed inside the entity payload, so file fields are omitted from the mapping UI.
-- **Location and address fields are not supported.** Beacon expects a structured address object that a single mapped form field cannot express.
 - **Read-only fields are omitted.** Smart fields, rollup fields, and auto-increment fields are computed by Beacon and rejected on write.
+- **Only one address per record can be mapped.** Address fields appear in the mapping UI one part at a time and fill in the record's first address. A write replaces the whole address list rather than adding to it.
 - **Record links need Beacon record IDs.** To populate one, your form must supply the numeric ID of an existing Beacon record. The plugin does not look records up by name.
 - **Beacon workflows can fire on API writes.** Before going live, check whether any active workflow will send communications or create tasks in response to records the form creates.
 

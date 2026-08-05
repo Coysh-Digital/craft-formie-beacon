@@ -1,5 +1,16 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.2.0 - 2026-08-05
+
+### Added
+- Address fields can now be mapped. They appear in the mapping list one part at a time — **Address (City)**, **Address (Postal code)** and so on — in the same way person names already do, and are reassembled into a single address when the submission is sent.
+
+### Changed
+- Requires [coyshdigital/beaconcrm-php](https://github.com/Coysh-Digital/beaconcrm-php) 1.1, which adds location support. Beacon models an address as a contact point — a list of objects, like emails and phones — rather than the single object previously assumed.
+
+### Notes
+- Mapping fills in the record's first address, and a write replaces the whole address list rather than adding to it. A record needing several addresses has to be written through the API directly.
+
 ## 1.1.0 - 2026-07-22
 
 ### Added
