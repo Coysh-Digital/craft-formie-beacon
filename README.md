@@ -11,6 +11,7 @@ A [Craft CMS](https://craftcms.com) plugin that adds [Beacon CRM](https://beacon
 - **Exact drop-down values.** Options for drop-down fields are read from your account, so you pick from the configured values rather than typing them and hoping.
 - **Create or update.** Optionally upsert on a field of your choice to avoid creating duplicate records from repeat submissions.
 - **Fixed values.** Send a constant value for any field, such as a Source of "Website", without needing a form field for it.
+- **Records linked by name.** A form collects a church name; Beacon's link fields want a record ID. The plugin looks the record up — optionally creating it — and can also add the new record to a list on the other side without dropping what is already there.
 - **Useful logging.** Successful writes log their Beacon record ID. Failures log Beacon's actual validation message rather than its generic error.
 
 ## Requirements
@@ -56,6 +57,7 @@ On a form, go to **Integrations > Beacon** and enable it. Then:
 - **Update Existing Records.** When on, the plugin upserts instead of always creating. Pick a **Match On** field that holds a genuinely unique value. `Email` is the usual choice for people. That field must also be mapped.
 - **Field Mapping.** Map your form fields to Beacon fields.
 - **Fixed values.** Send a constant value for a field on every submission. Drop-downs offer their configured options, everything else takes free text. If a field is both mapped and fixed, the submitted value wins.
+- **Linked Records.** For each field that points at another record, choose the form value that identifies it, the field to match it against, and whether to create it when nothing matches. See the [documentation](https://coysh.digital/plugins/craft-formie-beacon/docs/linking-records).
 
 Use **Opt-In Field** if you only want to send data when a user consents, typically an Agree field.
 

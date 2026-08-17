@@ -5,6 +5,7 @@ namespace coyshdigital\formiebeacon\integrations\crm;
 use Craft;
 use craft\helpers\App;
 use craft\helpers\Json;
+use CoyshDigital\Beacon\BeaconClient;
 use CoyshDigital\Beacon\Config as BeaconConfig;
 use CoyshDigital\Beacon\Exception\ApiException;
 use CoyshDigital\Beacon\Http\ErrorParser;
@@ -58,6 +59,24 @@ class Beacon extends Crm
     public ?string $primaryFieldKey = null;
     public ?array $fixedValues = null;
 
+    /**
+     * Which form value finds the record to link to, per link field.
+     * `['c_home_church' => '{field:churchName}']`
+     *
+     * Kept apart from $linkedRecords because Formie's field-mapping component
+     * owns this half: it is the only thing that can offer the form's own fields
+     * for selection, and it writes one flat value per row.
+     */
+    public ?array $linkedRecordValues = null;
+
+    /**
+     * How to use that value, per link field.
+     * `['c_home_church' => ['matchOn' => 'organization:name', …]]`
+     */
+    public ?array $linkedRecords = null;
+
+    private ?BeaconClient $_beaconClient = null;
+
 
     // Public Methods
     // =========================================================================
@@ -103,11 +122,18 @@ class Beacon extends Crm
             // The library parses the schema and sorts the record types by
             // label; Beacon returns them in an arbitrary order that puts custom
             // types before Person.
-            foreach (EntityType::listFromResponse($response) as $entityType) {
+            $entityTypes = EntityType::listFromResponse($response);
+
+            // A record link names the types it points at, so building its
+            // mapping row needs the other types' fields as well as this one's.
+            // They are all in the response already, so this costs no extra call.
+            $byKey = ArrayHelper::index($entityTypes, 'key');
+
+            foreach ($entityTypes as $entityType) {
                 $settings['entityTypes'][] = [
                     'id' => $entityType->key,
                     'name' => $entityType->label,
-                    'fields' => $this->_getFields($entityType),
+                    'fields' => $this->_getFields($entityType, $byKey),
                 ];
             }
         } catch (Throwable $e) {
@@ -136,9 +162,16 @@ class Beacon extends Crm
             // wins if the same Beacon field has both. They go through the same
             // shaping as mapped values, so a fixed currency or drop-down value
             // still ends up in the right JSON shape.
+            //
+            // Linked records win over both: a row there says explicitly how to
+            // find the record, which is more specific than a raw ID mapped into
+            // the same field.
+            $links = $this->_resolveLinkedRecords($submission);
+
             $values = array_merge(
                 $this->_getFixedValues(),
-                $this->getFieldMappingValues($submission, $this->fieldMapping, $fields)
+                $this->getFieldMappingValues($submission, $this->fieldMapping, $fields),
+                array_map(static fn(array $link): int => $link['id'], $links)
             );
 
             $entity = $this->_buildPayload($values, $fields);
@@ -202,6 +235,10 @@ class Beacon extends Crm
             }
 
             $this->_logSuccess($response, $method);
+
+            // The reverse direction, which can only happen once this record has
+            // an ID: add it to a list on the record it was linked to.
+            $this->_linkBack($links, (int)$recordId);
         } catch (Throwable $e) {
             Integration::apiError($this, $e);
 
@@ -294,6 +331,224 @@ class Beacon extends Crm
     }
 
     /**
+     * Turns the values behind the Linked Records table into Beacon record IDs.
+     *
+     * A link field stores an integer record ID, which a form never has. Each
+     * configured row names a field on the target record type to match the
+     * submitted value against — a church name, an email address — and whether
+     * to create the record when nothing matches.
+     *
+     * A row that cannot be resolved is logged and skipped rather than failing
+     * the submission. Losing the link to a church is bad; losing the whole
+     * enquiry because the church name was misspelt is worse.
+     *
+     * @return array<string, array{id: int, backType: ?string, backField: ?string, targetType: string}>
+     */
+    private function _resolveLinkedRecords(Submission $submission): array
+    {
+        $mapping = array_filter($this->linkedRecordValues ?? [], static fn($value): bool => $value !== '' && $value !== null);
+
+        // A row does nothing without both halves: a value to look up, and a
+        // field to look it up against.
+        $rows = array_filter(
+            $this->linkedRecords ?? [],
+            static fn($row, $key): bool => is_array($row) && ($row['matchOn'] ?? '') !== '' && isset($mapping[$key]),
+            ARRAY_FILTER_USE_BOTH
+        );
+
+        if (!$rows) {
+            return [];
+        }
+
+        // Reuse Formie's own token resolution, so `{field:…}` and
+        // `{submission:…}` behave exactly as they do in the mapping table.
+        //
+        // The field definitions are rebuilt as plain strings rather than reused
+        // from $fields. A link field's own type is array — that is what Beacon
+        // stores — but what is being read here is the church name that finds
+        // the record, so casting it to the link's type would wrap the name in
+        // an array before anything could look it up.
+        $lookupFields = array_map(
+            static fn(string $handle): IntegrationField => new IntegrationField([
+                'handle' => $handle,
+                'type' => IntegrationField::TYPE_STRING,
+            ]),
+            array_keys($rows)
+        );
+
+        $values = $this->getFieldMappingValues(
+            $submission,
+            array_intersect_key($mapping, $rows),
+            $lookupFields
+        );
+
+        $resolved = [];
+
+        foreach ($rows as $fieldKey => $row) {
+            $value = $values[$fieldKey] ?? null;
+
+            if ($value === null || $value === '' || $value === []) {
+                continue;
+            }
+
+            [$targetType, $matchField] = $this->_splitTarget((string)$row['matchOn']);
+
+            if (!$targetType || !$matchField) {
+                continue;
+            }
+
+            try {
+                $id = $this->_lookUpRecord($targetType, $matchField, $value, !empty($row['create']));
+            } catch (Throwable $e) {
+                $this->_logLinkFailure($fieldKey, $targetType, $matchField, $value, $e->getMessage());
+
+                continue;
+            }
+
+            if (!$id) {
+                $this->_logLinkFailure($fieldKey, $targetType, $matchField, $value, Craft::t('formie', 'No matching record, and “Create if missing” is off.'));
+
+                continue;
+            }
+
+            [$backType, $backField] = $this->_splitTarget((string)($row['linkBack'] ?? ''));
+
+            $resolved[$fieldKey] = [
+                'id' => $id,
+                'targetType' => $targetType,
+                'backType' => $backType,
+                'backField' => $backField,
+            ];
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Finds the record to link to, creating it when asked.
+     *
+     * `resolveId()` is an upsert: one request, and it creates when nothing
+     * matches. `findBy()` never creates, but has to page the whole record type
+     * because Beacon has no search endpoint — so it is the slower, safer
+     * option, and the one to pick when a typo must not spawn a record.
+     */
+    private function _lookUpRecord(string $typeKey, string $matchField, mixed $value, bool $create): ?int
+    {
+        $records = $this->_beaconClient()->entitiesWithSchema($typeKey);
+
+        if ($create) {
+            return $records->resolveId($matchField, $records->payload()->set($matchField, $value));
+        }
+
+        $record = $records->findBy($matchField, $value);
+        $id = $record['id'] ?? null;
+
+        return is_numeric($id) ? (int)$id : null;
+    }
+
+    /**
+     * Adds the record just written to a list on the record it was linked to.
+     *
+     * This is the half a payload cannot express: the field lives on the *other*
+     * record, so it can only be set once this one has an ID. It goes through
+     * the library's `link()`, which reads the list and sends it back with the
+     * new ID appended — a plain write would replace the list and drop every
+     * other entry.
+     *
+     * @param array<string, array{id: int, backType: ?string, backField: ?string, targetType: string}> $links
+     */
+    private function _linkBack(array $links, int $recordId): void
+    {
+        if (!$recordId) {
+            return;
+        }
+
+        foreach ($links as $fieldKey => $link) {
+            if (!$link['backType'] || !$link['backField']) {
+                continue;
+            }
+
+            try {
+                $this->_beaconClient()
+                    ->entities($link['backType'])
+                    ->link($link['id'], $link['backField'], $recordId);
+            } catch (Throwable $e) {
+                $detail = $e instanceof ApiException ? $e->getSummary() : $e->getMessage();
+
+                // Beacon phrases a full single-value field as "must contain
+                // less than 1 items", which reads like a bug rather than a
+                // field that is simply already taken.
+                if (str_contains($detail, 'must contain less than')) {
+                    $detail .= ' ' . Craft::t('formie', 'That field holds one record and already has one, so it was left alone rather than overwritten.');
+                }
+
+                // Logged, not thrown. The record itself was written, and losing
+                // the submission over the link would be the worse outcome.
+                Integration::error($this, Craft::t('formie', 'Beacon record #{id} was written, but it could not be added to “{field}” on {type} #{target}. {detail}', [
+                    'id' => $recordId,
+                    'field' => $link['backField'],
+                    'type' => $link['backType'],
+                    'target' => $link['id'],
+                    'detail' => $detail,
+                ]));
+            }
+        }
+    }
+
+    /**
+     * Splits a `recordType:fieldKey` option value.
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    private function _splitTarget(string $value): array
+    {
+        if (!str_contains($value, ':')) {
+            return [null, null];
+        }
+
+        [$type, $field] = explode(':', $value, 2);
+
+        return [$type !== '' ? $type : null, $field !== '' ? $field : null];
+    }
+
+    /**
+     * Logged, not thrown. A link that cannot be resolved should cost the link,
+     * not the whole submission — a misspelt church name is not a reason to lose
+     * an enquiry.
+     */
+    private function _logLinkFailure(string $fieldKey, string $typeKey, string $matchField, mixed $value, string $detail): void
+    {
+        Integration::error($this, Craft::t('formie', 'Could not link “{field}”: no {type} where {matchField} is “{value}”. {detail} The record was still written, without this link.', [
+            'field' => $fieldKey,
+            'type' => $typeKey,
+            'matchField' => $matchField,
+            'value' => is_scalar($value) ? (string)$value : Json::encode($value),
+            'detail' => $detail,
+        ]));
+    }
+
+    /**
+     * A client that can send, for the lookups Formie cannot do.
+     *
+     * Everything else in this class hands an unsent request to Formie's
+     * `deliverPayload()`, so its payload events, proxy settings and per-submission
+     * logging keep working. Lookups cannot go that way: finding or creating a
+     * record is several requests, or an upsert whose response is needed before
+     * the real payload can be built, and neither is a single describable request
+     * that Formie could send on our behalf.
+     *
+     * The main record is still written through Formie. Only the lookups and the
+     * link-back go direct.
+     */
+    private function _beaconClient(): BeaconClient
+    {
+        return $this->_beaconClient ??= new BeaconClient(new BeaconConfig(
+            (string)App::parseEnv($this->accountId),
+            (string)App::parseEnv($this->apiKey),
+        ));
+    }
+
+    /**
      * Reports a failed write with as much detail as Beacon gave us.
      *
      * Beacon returns validation problems as a 500 whose body carries the real
@@ -354,7 +609,7 @@ class Beacon extends Crm
      * fields are computed by Beacon and rejected on write, and file and user
      * fields need more than a single mapped value can carry.
      */
-    private function _getFields(EntityType $entityType): array
+    private function _getFields(EntityType $entityType, array $typesByKey = []): array
     {
         $integrationFields = [];
 
@@ -385,10 +640,79 @@ class Beacon extends Crm
                 'type' => $this->_convertFieldType($field),
                 'sourceType' => $field->rawType,
                 'options' => $this->_getFieldOptions($field),
+                'data' => $this->_getLinkData($field, $entityType, $typesByKey),
             ]);
         }
 
         return $integrationFields;
+    }
+
+    /**
+     * The choices a record-link field offers in the Linked Records table.
+     *
+     * A link stores an integer record ID, but a form collects a name or an
+     * email address. So each link field needs to know which field on the record
+     * it points at can be matched against — and, for the reverse direction,
+     * which field over there points back at this record type.
+     *
+     * Both option lists are flat, with the target record type encoded into the
+     * value as `type:field`. A link may point at more than one record type, and
+     * one flat list avoids a second select whose options depend on the first.
+     */
+    private function _getLinkData(BeaconField $field, EntityType $entityType, array $typesByKey): array
+    {
+        $targetKeys = $field->linksTo();
+
+        if (!$targetKeys) {
+            return [];
+        }
+
+        $match = [];
+        $back = [];
+
+        // Only worth naming the record type when there is a choice of them.
+        $prefixed = count($targetKeys) > 1;
+
+        foreach ($targetKeys as $targetKey) {
+            $target = $typesByKey[$targetKey] ?? null;
+
+            if (!$target instanceof EntityType) {
+                continue;
+            }
+
+            $prefix = $prefixed ? $target->label . ' → ' : '';
+
+            foreach ($target->mappableFields() as $targetField) {
+                // A structured field cannot be matched on as a single value,
+                // and matching one link against another makes no sense.
+                if ($targetField->parts() || $targetField->isReference()) {
+                    continue;
+                }
+
+                $match[] = [
+                    'value' => $targetKey . ':' . $targetField->key,
+                    'label' => $prefix . $targetField->label,
+                ];
+            }
+
+            foreach ($target->fields() as $targetField) {
+                if (!$targetField->isReference() || !$targetField->isWritable()) {
+                    continue;
+                }
+
+                // Only fields over there that will accept a record of this type.
+                if (!in_array($entityType->key, $targetField->linksTo(), true)) {
+                    continue;
+                }
+
+                $back[] = [
+                    'value' => $targetKey . ':' . $targetField->key,
+                    'label' => $prefix . $targetField->label,
+                ];
+            }
+        }
+
+        return ['link' => ['match' => $match, 'back' => $back]];
     }
 
     /**
