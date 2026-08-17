@@ -22,6 +22,8 @@ features:
     details: Match on a field of your choice so returning visitors update their existing record instead of creating a duplicate.
   - title: Correct shapes, automatically
     details: Names, emails, phone numbers, drop-downs, record links and currency amounts are all converted into the exact JSON Beacon expects.
+  - title: Records linked by name
+    details: Map the church someone types into a proper link to that Organisation, looking it up — or creating it — before the record is sent.
 ---
 
 ## What it is
@@ -52,6 +54,9 @@ there.
 - **The right JSON shapes.** Person names, email and phone arrays, drop-downs,
   record links and currency objects are all built for you. See
   [How field types are handled](/field-types).
+- **Records linked by name.** A form collects a church name; Beacon wants a
+  record ID. The plugin looks it up, optionally creates it, and can add the new
+  record to a list on the other side. See [Linking records](/linking-records).
 - **Opt-in support.** Use Formie's opt-in field so data is only sent when
   someone actually consents.
 
@@ -62,6 +67,7 @@ there.
 - Ready to set up a form? See [Mapping form fields](/field-mapping).
 - Worried about duplicates? See
   [Creating and updating records](/creating-and-updating).
+- Linking to a church, branch or city? See [Linking records](/linking-records).
 - Something not saving? See [Troubleshooting](/troubleshooting).
 
 ::: warning Beacon workflows can fire on API writes

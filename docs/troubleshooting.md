@@ -96,10 +96,46 @@ exact, including capitalisation. If you mapped a drop-down to a form field, make
 sure the form's values match the Beacon options character for character. Picking
 a fixed value in the mapping screen avoids this entirely.
 
-**Record links** need the numeric ID of an existing Beacon record. A name will
-not work.
+**Record links** store the numeric ID of an existing Beacon record. Mapping a
+name into one will not work — use [Linked Records](/linking-records), which
+looks the record up for you.
 
 **Currency** amounts are in major units, so `25.5` is £25.50.
+
+## A link is not being made
+
+Look for a line beginning **Could not link** in the submission's Integrations
+tab. It quotes the value that was searched for, which is usually the whole
+story: a name typed slightly differently from the one in Beacon.
+
+**"No matching record, and 'Create if missing' is off."** Nothing in Beacon has
+that value in the **Match On** field. Matching ignores capitalisation but is
+otherwise exact. Either correct the record in Beacon, turn on **Create If
+Missing**, or give people a drop-down instead of a text box.
+
+**Nothing logged at all** means the row is not switched on. A Linked Records row
+needs both a **Look Up From** field and a **Match On** field before it does
+anything.
+
+**"could not be added to …"** means the main record was written and the link to
+it was made, but the **Also Add To** step failed. If the detail says *must
+contain less than 1 items*, that field in Beacon holds a single record and
+already has one — turn on **Allow multiple** for it in Beacon if it should hold
+a list.
+
+**A relationship is not appearing.** Beacon's Relationships feature — the one
+with named types such as Trustee, under Settings → Relationships — is not
+available through Beacon's API, so no integration can set it. See
+[Linking records](/linking-records#what-this-cannot-do-beacon-s-relationships).
+
+## Unexpected new organisations
+
+**Create If Missing** creates a record whenever the submitted value matches
+nothing, and matching is exact apart from capitalisation. On a free-text field
+that means every variation of a name becomes its own record.
+
+Turn it off and read the log for a while to see what people actually type, then
+either fix the source data or replace the text box with a drop-down.
 
 ## Duplicate records
 

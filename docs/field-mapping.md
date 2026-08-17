@@ -58,10 +58,16 @@ interface. Formie's own Name field exposes its parts, so map
 
 ### Record links
 
-Fields that link to another record, such as **Organisation** or **City**,
-expect the numeric ID of an existing Beacon record. The plugin does not look
-records up by name, so your form has to supply the ID, typically from a hidden
-field or a drop-down whose values are Beacon IDs.
+Fields that link to another record, such as **Organisation** or **City**, store
+the numeric ID of an existing Beacon record, which a form never has.
+
+Use the [**Linked Records**](/linking-records) table rather than this one. It
+lets you map the form field where someone types a church or a city name, choose
+the field to find the record by, and optionally create it when nothing matches.
+
+Mapping a record link here instead only works if your form supplies a real
+Beacon ID, typically from a hidden field or a drop-down whose values are IDs. If
+a field is set up in both places, **Linked Records** wins.
 
 ## Fixed values
 

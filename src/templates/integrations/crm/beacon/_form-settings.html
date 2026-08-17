@@ -107,6 +107,99 @@
 
         <hr>
 
+        {# Record-link fields carry their lookup options in `data.link`, put
+           there by _getLinkData(). Everything else has an empty `data`. #}
+        <div class="field">
+            <div class="heading">
+                <label id="linked-records-label">{{ 'Linked Records' | t('formie') }}</label>
+
+                <div class="instructions">
+                    <p>{{ 'Fields that link to another record store a {name} record ID, which a form never has. Choose the form value that identifies the record, and the field to find it by — a church name, an email address — and the plugin looks it up before sending.' | t('formie', { name: displayName }) }}</p>
+                </div>
+            </div>
+
+            <div v-if="!getSourceFields('entityTypes').filter(f => f.data && f.data.link).length" class="input ltr">
+                <div class="zilch">{{ 'This record type has no fields that link to another record.' | t('formie') }}</div>
+            </div>
+
+            <template v-else>
+                <integration-field-mapping
+                    label="{{ 'Look Up From' | t('formie') }}"
+                    instructions="{{ 'The form value that identifies the record to link to.' | t('formie') }}"
+                    name-label="{{ displayName }}"
+                    id="linked-record-values"
+                    name="linkedRecordValues"
+                    :value="get(form, 'settings.integrations.{{ handle }}.linkedRecordValues')"
+                    :rows="getSourceFields('entityTypes').filter(f => f.data && f.data.link)"
+                ></integration-field-mapping>
+
+                <div class="input ltr">
+                    <table class="editable fullwidth">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="singleline-cell textual">{{ '{name} Field' | t('formie', { name: displayName }) }}</th>
+                                <th scope="col" class="select-cell">{{ 'Match On' | t('formie') }}</th>
+                                <th scope="col" class="checkbox-cell">{{ 'Create If Missing' | t('formie') }}</th>
+                                <th scope="col" class="select-cell">{{ 'Also Add To' | t('formie') }}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template v-for="(field, index) in getSourceFields('entityTypes')" :key="index">
+                                <tr v-if="field.data && field.data.link">
+                                    <td class="singleline-cell textual" style="width: 28%;">
+                                        <span class="fui-table-label">${ field.name }</span>
+                                    </td>
+
+                                    <td class="select-cell" style="width: 27%;">
+                                        <div class="select small">
+                                            <select
+                                                :name="'linkedRecords[' + field.handle + '][matchOn]'"
+                                                :value="get(form, 'settings.integrations.{{ handle }}.linkedRecords.' + field.handle + '.matchOn')"
+                                            >
+                                                <option value="">{{ 'Don’t Link' | t('formie') }}</option>
+                                                <option v-for="(option, i) in field.data.link.match" :key="i" :value="option.value">${ option.label }</option>
+                                            </select>
+                                        </div>
+                                    </td>
+
+                                    <td class="checkbox-cell" style="width: 18%;">
+                                        {# The unchecked box still has to post something, or an
+                                           untouched row would look the same as a cleared one. #}
+                                        <input type="hidden" :name="'linkedRecords[' + field.handle + '][create]'" value="">
+                                        <input
+                                            type="checkbox"
+                                            class="checkbox"
+                                            :id="'link-create-' + field.handle"
+                                            :name="'linkedRecords[' + field.handle + '][create]'"
+                                            value="1"
+                                            :checked="get(form, 'settings.integrations.{{ handle }}.linkedRecords.' + field.handle + '.create')"
+                                        >
+                                        <label :for="'link-create-' + field.handle"></label>
+                                    </td>
+
+                                    <td class="select-cell" style="width: 27%;">
+                                        <div v-if="field.data.link.back.length" class="select small">
+                                            <select
+                                                :name="'linkedRecords[' + field.handle + '][linkBack]'"
+                                                :value="get(form, 'settings.integrations.{{ handle }}.linkedRecords.' + field.handle + '.linkBack')"
+                                            >
+                                                <option value="">{{ 'Nothing' | t('formie') }}</option>
+                                                <option v-for="(option, i) in field.data.link.back" :key="i" :value="option.value">${ option.label }</option>
+                                            </select>
+                                        </div>
+
+                                        <span v-else class="light">{{ 'Nothing links back' | t('formie') }}</span>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </template>
+        </div>
+
+        <hr>
+
         <div class="field">
             <div class="heading">
                 <label id="fixed-values-label">{{ 'Fixed Values' | t('formie') }}</label>
