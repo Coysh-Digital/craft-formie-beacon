@@ -33,8 +33,15 @@ the site name, from the **Submission** group in the same list.
 Only fields you actually map are sent. Empty values are skipped, so a blank
 optional field will not wipe out data already held in Beacon.
 
+Plain fields also offer a **Payment** group, with the amount, currency,
+reference, status, date and provider of the submission's payment. See
+[Payment values](/multiple-records#payment-values).
+
 To send the same value every time rather than a value from the form, use
 [Fixed values](#fixed-values) below.
+
+To write more than one record from a form, such as a person, an event
+attendee and a payment, see [Multiple records per submission](/multiple-records).
 
 ### Drop-down fields
 

@@ -28,6 +28,11 @@ Then, in the table below it:
 A row does nothing until both **Look Up From** and **Match On** are set. Leaving
 **Match On** as *Don't Link* switches the row off.
 
+When the form writes [more than one record](/multiple-records), **Match On**
+has one more group, **Record from this submission**. Choosing a record there
+links to the one just written, with nothing to look up, so **Look Up From** can
+stay empty.
+
 ## Choosing a match field
 
 The same rule as the [match field for upserts](/creating-and-updating): it needs
