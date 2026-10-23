@@ -59,6 +59,8 @@ On a form, go to **Integrations > Beacon** and enable it. Then:
 - **Fixed values.** Send a constant value for a field on every submission. Drop-downs offer their configured options, everything else takes free text. If a field is both mapped and fixed, the submitted value wins.
 - **Linked Records.** For each field that points at another record, choose the form value that identifies it, the field to match it against, and whether to create it when nothing matches. See the [documentation](https://coysh.digital/plugins/craft-formie-beacon/docs/linking-records).
 
+- **Additional Records.** Write more records from the same submission, such as a person, an event attendee and a payment. They are written in order, each can link to the records before it, and the payment amount and reference can be mapped into any of them. See the [documentation](https://coysh.digital/plugins/craft-formie-beacon/docs/multiple-records).
+
 Use **Opt-In Field** if you only want to send data when a user consents, typically an Agree field.
 
 ## How values are converted

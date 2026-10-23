@@ -25,6 +25,7 @@ use verbb\formie\elements\Submission;
 use verbb\formie\helpers\ArrayHelper;
 use verbb\formie\models\IntegrationField;
 use verbb\formie\models\IntegrationFormSettings;
+use verbb\formie\models\Payment;
 use verbb\formie\models\Stencil;
 
 /**
@@ -39,6 +40,25 @@ use verbb\formie\models\Stencil;
  */
 class Beacon extends Crm
 {
+    // Constants
+    // =========================================================================
+
+    /**
+     * The id of the main record, as used in `@main` link references.
+     */
+    public const MAIN_RECORD = 'main';
+
+    /**
+     * Prefix of a mapping value that reads from the submission's payment rather
+     * than a form field. Formie does not know these, so they are resolved here.
+     */
+    private const PAYMENT_TOKEN = '{payment:';
+
+    private const STATUS_WRITTEN = 'written';
+    private const STATUS_FAILED = 'failed';
+    private const STATUS_SKIPPED = 'skipped';
+
+
     // Static Methods
     // =========================================================================
 
@@ -74,6 +94,24 @@ class Beacon extends Crm
      * `['c_home_church' => ['matchOn' => 'organization:name', …]]`
      */
     public ?array $linkedRecords = null;
+
+    /**
+     * Whether the main record is only written once the submission has a
+     * successful payment.
+     */
+    public bool $requirePayment = false;
+
+    /**
+     * Further records written after the main one, in order. Each has the same
+     * keys as the main record's settings, plus a stable `id` that later records
+     * use to link back to it (`@r8f2k` in a Linked Records "Match On").
+     *
+     * The main record stays in the properties above so forms saved before this
+     * existed keep working untouched.
+     *
+     * `[['id' => 'r8f2k', 'entityType' => 'payment', 'fieldMapping' => […], 'requirePayment' => '1', …], …]`
+     */
+    public ?array $additionalRecords = null;
 
     private ?BeaconClient $_beaconClient = null;
 
@@ -143,109 +181,40 @@ class Beacon extends Crm
         return new IntegrationFormSettings($settings);
     }
 
+    /**
+     * Writes the main record, then each additional record in the order they
+     * were set up, so a later record can link to an earlier one.
+     *
+     * A record that fails does not stop the others: only the records that link
+     * to it are skipped, because they have nothing to link to. The integration
+     * still reports failure, so it shows against the submission.
+     */
     public function sendPayload(Submission $submission): bool
     {
-        try {
-            // Shaping the payload depends on knowing each field's Beacon type,
-            // so bail out rather than send unshaped values that Beacon rejects.
-            $fields = $this->_getSelectedTypeFields(true);
+        $payment = $this->_getPayment($submission);
 
-            if (!$fields) {
-                Integration::error($this, Craft::t('formie', 'Unable to resolve the field schema for “{type}”. Refresh the integration and try again.', [
-                    'type' => $this->entityType,
-                ]), true);
+        $results = [];
+        $ok = true;
 
-                return false;
-            }
-
-            // Fixed values are merged in first so a mapped form field always
-            // wins if the same Beacon field has both. They go through the same
-            // shaping as mapped values, so a fixed currency or drop-down value
-            // still ends up in the right JSON shape.
-            //
-            // Linked records win over both: a row there says explicitly how to
-            // find the record, which is more specific than a raw ID mapped into
-            // the same field.
-            $links = $this->_resolveLinkedRecords($submission);
-
-            $values = array_merge(
-                $this->_getFixedValues(),
-                $this->getFieldMappingValues($submission, $this->fieldMapping, $fields),
-                array_map(static fn(array $link): int => $link['id'], $links)
-            );
-
-            $entity = $this->_buildPayload($values, $fields);
-
-            if ($entity->isEmpty()) {
-                Integration::error($this, Craft::t('formie', 'No mapped values to send to {name}.', [
-                    'name' => static::displayName(),
-                ]), true);
-
-                return true;
-            }
-
-            // Beacon matches an existing record on `primary_field_key`, so that
-            // key must also carry a value in the entity body itself.
-            if ($this->useUpsert && $this->primaryFieldKey && !$entity->hasField($this->primaryFieldKey)) {
-                Integration::error($this, Craft::t('formie', 'Upsert key “{key}” is not mapped, so no record can be matched. Map it or disable upsert.', [
-                    'key' => $this->primaryFieldKey,
-                ]), true);
-
-                return false;
-            }
-
-            $entities = Entities::describe((string)$this->entityType);
-
-            // The library describes the request; Formie sends it, so its payload
-            // events, proxy settings and submission logging all still apply.
-            $request = $this->useUpsert && $this->primaryFieldKey
-                ? $entities->upsertRequest($this->primaryFieldKey, $entity)
-                : $entities->createRequest($entity);
-
-            $method = $request->method;
-            $endpoint = $request->path;
-            $payload = $request->body ?? [];
-
+        foreach ($this->_getRecordConfigs() as $config) {
             try {
-                $response = $this->deliverPayload($submission, $endpoint, $payload, $method);
+                $result = $this->_writeRecord($submission, $config, $results, $payment);
             } catch (Throwable $e) {
-                // Beacon puts the useful part of a validation failure in a
-                // nested `raw` property that the default handler truncates
-                // away, so unpack it before reporting.
-                $this->_logApiFailure($e, $method, $endpoint, $payload);
+                // Logged, not thrown: apiError() would rethrow, and one record's
+                // failure must not stop the records that do not depend on it.
+                Integration::apiError($this, $e, false);
 
-                return false;
+                $result = $this->_result(self::STATUS_FAILED, $config['entityType']);
             }
 
-            if ($response === false) {
-                return true;
+            $results[$config['id']] = $result;
+
+            if ($result['status'] === self::STATUS_FAILED) {
+                $ok = false;
             }
-
-            $recordId = $response['entity']['id'] ?? null;
-
-            if (!$recordId) {
-                Integration::error($this, Craft::t('formie', 'Beacon returned no record ID for {method} {endpoint}. Response: {response} Payload: {payload}', [
-                    'method' => $method,
-                    'endpoint' => $endpoint,
-                    'response' => Json::encode($response),
-                    'payload' => Json::encode($payload),
-                ]), true);
-
-                return false;
-            }
-
-            $this->_logSuccess($response, $method);
-
-            // The reverse direction, which can only happen once this record has
-            // an ID: add it to a list on the record it was linked to.
-            $this->_linkBack($links, (int)$recordId);
-        } catch (Throwable $e) {
-            Integration::apiError($this, $e);
-
-            return false;
         }
 
-        return true;
+        return $ok;
     }
 
     public function fetchConnection(): bool
@@ -299,7 +268,13 @@ class Beacon extends Crm
         ];
 
         $rules[] = [
-            ['fieldMapping'], 'validateFieldMapping', 'params' => $this->_getSelectedTypeFields(), 'when' => function($model) {
+            ['fieldMapping'], 'validateFieldMapping', 'params' => $this->_getTypeFields($this->entityType), 'when' => function($model) {
+                return $model->enabled;
+            }, 'on' => [Integration::SCENARIO_FORM],
+        ];
+
+        $rules[] = [
+            ['additionalRecords'], 'validateAdditionalRecords', 'when' => function($model) {
                 return $model->enabled;
             }, 'on' => [Integration::SCENARIO_FORM],
         ];
@@ -307,19 +282,373 @@ class Beacon extends Crm
         return $rules;
     }
 
+    /**
+     * The extra records need the same things the main one does — a record type,
+     * and a match field when updating — but their settings are nested, so the
+     * errors say which record they belong to.
+     */
+    public function validateAdditionalRecords(string $attribute): void
+    {
+        foreach (array_values($this->additionalRecords ?? []) as $index => $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+
+            $label = Craft::t('formie', 'Additional record {n}', ['n' => $index + 1]);
+
+            if (empty($record['entityType'])) {
+                $this->addError($attribute, Craft::t('formie', '{label}: choose a record type, or remove it.', ['label' => $label]));
+
+                continue;
+            }
+
+            if (filter_var($record['useUpsert'] ?? false, FILTER_VALIDATE_BOOLEAN) && empty($record['primaryFieldKey'])) {
+                $this->addError($attribute, Craft::t('formie', '{label}: choose a Match On field, or turn off Update Existing Records.', ['label' => $label]));
+            }
+        }
+    }
+
 
     // Private Methods
     // =========================================================================
 
     /**
+     * Writes one record and says what happened.
+     *
+     * `skipped` is a deliberate outcome and not a failure: an additional record
+     * had nothing to send, or waits on a payment that has not succeeded.
+     *
+     * Nothing in here may throw for a record-level problem. Formie's
+     * `Integration::error()` throws when its last argument is true, which would
+     * end the whole submission at the first bad record, so problems are logged
+     * and reported back as a status instead.
+     *
+     * @param array<string, array{status: string, id: ?int, type: string}> $results what happened to the records before this one, by record id
+     * @return array{status: string, id: ?int, type: string}
+     */
+    private function _writeRecord(Submission $submission, array $config, array $results, ?Payment $payment): array
+    {
+        $typeKey = $config['entityType'];
+
+        if ($config['requirePayment'] && $payment?->status !== Payment::STATUS_SUCCESS) {
+            Integration::info($this, Craft::t('formie', '{label} (“{type}”) was not written: it is only sent once the payment has succeeded.', [
+                'label' => $config['label'],
+                'type' => $typeKey,
+            ]));
+
+            return $this->_result(self::STATUS_SKIPPED, $typeKey);
+        }
+
+        // Shaping the payload depends on knowing each field's Beacon type,
+        // so bail out rather than send unshaped values that Beacon rejects.
+        $fields = $this->_getTypeFields($typeKey, true);
+
+        if (!$fields) {
+            Integration::error($this, Craft::t('formie', 'Unable to resolve the field schema for “{type}”. Refresh the integration and try again.', [
+                'type' => $typeKey,
+            ]));
+
+            return $this->_result(self::STATUS_FAILED, $typeKey);
+        }
+
+        // Linked records win over fixed and mapped values: a row there says
+        // explicitly how to find the record, which is more specific than a raw
+        // ID mapped into the same field.
+        $links = $this->_resolveLinkedRecords($submission, $config, $results);
+
+        if ($links['blocked']) {
+            return $this->_skipForMissingLink($config, $links['blocked']);
+        }
+
+        // Fixed values are merged in first so a mapped form field always
+        // wins if the same Beacon field has both. They go through the same
+        // shaping as mapped values, so a fixed currency or drop-down value
+        // still ends up in the right JSON shape.
+        $values = array_merge(
+            $this->_getFixedValues($config),
+            $this->_getMappedValues($submission, $config, $fields, $payment),
+            array_map(static fn(array $link): int => $link['id'], $links['resolved'])
+        );
+
+        $entity = $this->_buildPayload($values, $fields);
+
+        if ($entity->isEmpty()) {
+            Integration::error($this, Craft::t('formie', 'No mapped values to send to {name} for {label} (“{type}”).', [
+                'name' => static::displayName(),
+                'label' => $config['label'],
+                'type' => $typeKey,
+            ]));
+
+            // The main record always has something to say, so an empty one is a
+            // mistake. An additional record can be legitimately empty — an
+            // optional attendee nobody filled in — and is simply left out.
+            return $this->_result($config['id'] === self::MAIN_RECORD ? self::STATUS_FAILED : self::STATUS_SKIPPED, $typeKey);
+        }
+
+        // Beacon matches an existing record on `primary_field_key`, so that
+        // key must also carry a value in the entity body itself.
+        if ($config['useUpsert'] && $config['primaryFieldKey'] && !$entity->hasField($config['primaryFieldKey'])) {
+            Integration::error($this, Craft::t('formie', 'Upsert key “{key}” is not mapped, so no record can be matched. Map it or disable upsert.', [
+                'key' => $config['primaryFieldKey'],
+            ]));
+
+            return $this->_result(self::STATUS_FAILED, $typeKey);
+        }
+
+        $entities = Entities::describe($typeKey);
+
+        // The library describes the request; Formie sends it, so its payload
+        // events, proxy settings and submission logging all still apply.
+        $request = $config['useUpsert'] && $config['primaryFieldKey']
+            ? $entities->upsertRequest($config['primaryFieldKey'], $entity)
+            : $entities->createRequest($entity);
+
+        $method = $request->method;
+        $endpoint = $request->path;
+        $payload = $request->body ?? [];
+
+        try {
+            $response = $this->deliverPayload($submission, $endpoint, $payload, $method);
+        } catch (Throwable $e) {
+            // Beacon puts the useful part of a validation failure in a
+            // nested `raw` property that the default handler truncates
+            // away, so unpack it before reporting.
+            $this->_logApiFailure($e, $method, $endpoint, $payload, $typeKey);
+
+            return $this->_result(self::STATUS_FAILED, $typeKey);
+        }
+
+        if ($response === false) {
+            return $this->_result(self::STATUS_SKIPPED, $typeKey);
+        }
+
+        $recordId = $response['entity']['id'] ?? null;
+
+        if (!$recordId) {
+            Integration::error($this, Craft::t('formie', 'Beacon returned no record ID for {method} {endpoint}. Response: {response} Payload: {payload}', [
+                'method' => $method,
+                'endpoint' => $endpoint,
+                'response' => Json::encode($response),
+                'payload' => Json::encode($payload),
+            ]));
+
+            return $this->_result(self::STATUS_FAILED, $typeKey);
+        }
+
+        $this->_logSuccess($response, $method, $typeKey);
+
+        // The reverse direction, which can only happen once this record has
+        // an ID: add it to a list on the record it was linked to.
+        $this->_linkBack($links['resolved'], (int)$recordId);
+
+        return $this->_result(self::STATUS_WRITTEN, $typeKey, (int)$recordId);
+    }
+
+    /**
+     * @return array{status: string, id: ?int, type: string}
+     */
+    private function _result(string $status, string $type, ?int $id = null): array
+    {
+        return ['status' => $status, 'id' => $id, 'type' => $type];
+    }
+
+    /**
+     * A record that links to an earlier record cannot be written if that one
+     * never was — there is no ID to link to, and writing it without the link
+     * would leave an orphan that looks complete.
+     *
+     * What the earlier record did decides how this counts. If it failed, this
+     * is a failure too; if it was skipped on purpose, so is this.
+     *
+     * @param array<string, array{ref: string, status: string}> $blocked
+     * @return array{status: string, id: ?int, type: string}
+     */
+    private function _skipForMissingLink(array $config, array $blocked): array
+    {
+        $failed = false;
+
+        foreach ($blocked as $fieldKey => $block) {
+            $failed = $failed || $block['status'] !== self::STATUS_SKIPPED;
+
+            Integration::error($this, Craft::t('formie', '{label} (“{type}”) was not written: “{field}” links to “{ref}”, which was {status}.', [
+                'label' => $config['label'],
+                'type' => $config['entityType'],
+                'field' => $fieldKey,
+                'ref' => $block['ref'],
+                'status' => match ($block['status']) {
+                    self::STATUS_FAILED => Craft::t('formie', 'not written because of an error'),
+                    self::STATUS_SKIPPED => Craft::t('formie', 'not written'),
+                    default => Craft::t('formie', 'not found. A record can only link to one set up before it'),
+                },
+            ]));
+        }
+
+        return $this->_result($failed ? self::STATUS_FAILED : self::STATUS_SKIPPED, $config['entityType']);
+    }
+
+    /**
+     * Every record to write, in order: the main record first, then each
+     * additional one. Each is normalised to the same shape, so the rest of the
+     * class works on one record at a time without caring where it came from.
+     *
+     * @return list<array{id: string, label: string, entityType: string, fieldMapping: array, useUpsert: bool, primaryFieldKey: string, fixedValues: array, linkedRecordValues: array, linkedRecords: array, requirePayment: bool}>
+     */
+    private function _getRecordConfigs(): array
+    {
+        $configs = [
+            $this->_normaliseRecord([
+                'entityType' => $this->entityType,
+                'fieldMapping' => $this->fieldMapping,
+                'useUpsert' => $this->useUpsert,
+                'primaryFieldKey' => $this->primaryFieldKey,
+                'fixedValues' => $this->fixedValues,
+                'linkedRecordValues' => $this->linkedRecordValues,
+                'linkedRecords' => $this->linkedRecords,
+                'requirePayment' => $this->requirePayment,
+            ], self::MAIN_RECORD, Craft::t('formie', 'Main record')),
+        ];
+
+        foreach (array_values($this->additionalRecords ?? []) as $index => $record) {
+            // A record added in the settings but never given a type has nothing
+            // to write. Saving the form rejects that, so this only guards old
+            // or hand-edited settings.
+            if (!is_array($record) || empty($record['entityType'])) {
+                continue;
+            }
+
+            $configs[] = $this->_normaliseRecord(
+                $record,
+                (string)($record['id'] ?? '') ?: 'record' . ($index + 1),
+                Craft::t('formie', 'Additional record {n}', ['n' => $index + 1])
+            );
+        }
+
+        return $configs;
+    }
+
+    private function _normaliseRecord(array $record, string $id, string $label): array
+    {
+        return [
+            'id' => $id,
+            'label' => $label,
+            'entityType' => (string)($record['entityType'] ?? ''),
+            'fieldMapping' => (array)($record['fieldMapping'] ?? []),
+            'useUpsert' => filter_var($record['useUpsert'] ?? false, FILTER_VALIDATE_BOOLEAN),
+            'primaryFieldKey' => (string)($record['primaryFieldKey'] ?? ''),
+            'fixedValues' => (array)($record['fixedValues'] ?? []),
+            'linkedRecordValues' => (array)($record['linkedRecordValues'] ?? []),
+            'linkedRecords' => (array)($record['linkedRecords'] ?? []),
+            'requirePayment' => filter_var($record['requirePayment'] ?? false, FILTER_VALIDATE_BOOLEAN),
+        ];
+    }
+
+    /**
+     * The payment this submission made, if any: the newest successful one, or
+     * failing that the newest of any status, so a status can still be mapped.
+     */
+    private function _getPayment(Submission $submission): ?Payment
+    {
+        $payments = $submission->getPayments() ?: [];
+
+        usort($payments, static fn(Payment $a, Payment $b): int => $b->id <=> $a->id);
+
+        foreach ($payments as $payment) {
+            if ($payment->status === Payment::STATUS_SUCCESS) {
+                return $payment;
+            }
+        }
+
+        return $payments[0] ?? null;
+    }
+
+    /**
+     * The payment values a mapping row can pick, by the token it is stored as.
+     *
+     * @return array<string, mixed>
+     */
+    private function _getPaymentValues(Payment $payment): array
+    {
+        return [
+            self::PAYMENT_TOKEN . 'amount}' => $payment->amount,
+            self::PAYMENT_TOKEN . 'currency}' => $payment->currency,
+            self::PAYMENT_TOKEN . 'reference}' => $payment->reference,
+            self::PAYMENT_TOKEN . 'status}' => $payment->status,
+            self::PAYMENT_TOKEN . 'date}' => $payment->dateCreated?->format('c'),
+            self::PAYMENT_TOKEN . 'provider}' => $payment->integrationId ? $payment->getIntegration()?->displayName() : null,
+        ];
+    }
+
+    /**
+     * The choices added to a mapping row's "Form Field" dropdown, beside the
+     * form's own fields.
+     */
+    private function _getPaymentOptions(): array
+    {
+        return [
+            'label' => Craft::t('formie', 'Payment'),
+            // Marks these as something to map from, not a drop-down's own
+            // choices, which the Fixed Values table also reads from `options`.
+            'payment' => true,
+            'options' => [
+                ['label' => Craft::t('formie', 'Amount'), 'value' => self::PAYMENT_TOKEN . 'amount}'],
+                ['label' => Craft::t('formie', 'Currency'), 'value' => self::PAYMENT_TOKEN . 'currency}'],
+                ['label' => Craft::t('formie', 'Reference'), 'value' => self::PAYMENT_TOKEN . 'reference}'],
+                ['label' => Craft::t('formie', 'Status'), 'value' => self::PAYMENT_TOKEN . 'status}'],
+                ['label' => Craft::t('formie', 'Date'), 'value' => self::PAYMENT_TOKEN . 'date}'],
+                ['label' => Craft::t('formie', 'Provider'), 'value' => self::PAYMENT_TOKEN . 'provider}'],
+            ],
+        ];
+    }
+
+    /**
+     * The values from the Field Mapping table.
+     *
+     * Formie resolves `{field:…}` and `{submission:…}`, but a `{payment:…}`
+     * value means nothing to it, so those rows are taken out and read from the
+     * payment here. They are cast the same way, so a payment amount mapped to a
+     * currency field is shaped like any other currency value.
+     */
+    private function _getMappedValues(Submission $submission, array $config, array $fields, ?Payment $payment): array
+    {
+        $mapping = $config['fieldMapping'];
+
+        $paymentMapping = array_filter(
+            $mapping,
+            static fn($value): bool => is_string($value) && str_starts_with($value, self::PAYMENT_TOKEN)
+        );
+
+        $values = $this->getFieldMappingValues($submission, array_diff_key($mapping, $paymentMapping), $fields);
+
+        if (!$paymentMapping || !$payment) {
+            return $values;
+        }
+
+        $paymentValues = $this->_getPaymentValues($payment);
+
+        foreach ($paymentMapping as $handle => $token) {
+            $value = $paymentValues[$token] ?? null;
+
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $field = ArrayHelper::firstWhere($fields, 'handle', $handle) ?? new IntegrationField();
+
+            $values[$handle] = static::convertValueForIntegration($value, $field);
+        }
+
+        return $values;
+    }
+
+    /**
      * Values entered directly in the form settings, sent on every submission.
      * Blank entries are dropped so an empty box is simply not sent.
      */
-    private function _getFixedValues(): array
+    private function _getFixedValues(array $config): array
     {
         $values = [];
 
-        foreach ($this->fixedValues ?? [] as $handle => $value) {
+        foreach ($config['fixedValues'] as $handle => $value) {
             if ($value === null || $value === '' || $value === []) {
                 continue;
             }
@@ -334,30 +663,69 @@ class Beacon extends Crm
      * Turns the values behind the Linked Records table into Beacon record IDs.
      *
      * A link field stores an integer record ID, which a form never has. Each
-     * configured row names a field on the target record type to match the
+     * configured row either names a field on the target record type to match the
      * submitted value against — a church name, an email address — and whether
-     * to create the record when nothing matches.
+     * to create the record when nothing matches, or points at a record written
+     * earlier in this same submission (`@main`, `@r8f2k`), whose ID is already
+     * known.
      *
-     * A row that cannot be resolved is logged and skipped rather than failing
+     * A lookup that cannot be resolved is logged and skipped rather than failing
      * the submission. Losing the link to a church is bad; losing the whole
-     * enquiry because the church name was misspelt is worse.
+     * enquiry because the church name was misspelt is worse. A reference to a
+     * record that was not written is different: it is reported back as
+     * `blocked`, so the caller can skip this record too.
      *
-     * @return array<string, array{id: int, backType: ?string, backField: ?string, targetType: string}>
+     * @param array<string, array{status: string, id: ?int, type: string}> $results what happened to the records before this one, by record id
+     * @return array{resolved: array<string, array{id: int, backType: ?string, backField: ?string, targetType: string}>, blocked: array<string, array{ref: string, status: string}>}
      */
-    private function _resolveLinkedRecords(Submission $submission): array
+    private function _resolveLinkedRecords(Submission $submission, array $config, array $results): array
     {
-        $mapping = array_filter($this->linkedRecordValues ?? [], static fn($value): bool => $value !== '' && $value !== null);
+        $mapping = array_filter($config['linkedRecordValues'], static fn($value): bool => $value !== '' && $value !== null);
 
-        // A row does nothing without both halves: a value to look up, and a
-        // field to look it up against.
+        // A lookup does nothing without both halves: a value to look up, and a
+        // field to look it up against. A reference to an earlier record has
+        // nothing to look up, so it needs only the one.
         $rows = array_filter(
-            $this->linkedRecords ?? [],
-            static fn($row, $key): bool => is_array($row) && ($row['matchOn'] ?? '') !== '' && isset($mapping[$key]),
+            $config['linkedRecords'],
+            static fn($row, $key): bool => is_array($row) && ($row['matchOn'] ?? '') !== '' && (str_starts_with((string)$row['matchOn'], '@') || isset($mapping[$key])),
             ARRAY_FILTER_USE_BOTH
         );
 
         if (!$rows) {
-            return [];
+            return ['resolved' => [], 'blocked' => []];
+        }
+
+        $resolved = [];
+        $blocked = [];
+
+        foreach ($rows as $fieldKey => $row) {
+            if (!str_starts_with((string)$row['matchOn'], '@')) {
+                continue;
+            }
+
+            $ref = substr((string)$row['matchOn'], 1);
+            $result = $results[$ref] ?? null;
+
+            if (($result['status'] ?? null) !== self::STATUS_WRITTEN) {
+                $blocked[$fieldKey] = ['ref' => $ref, 'status' => $result['status'] ?? 'missing'];
+
+                continue;
+            }
+
+            [$backType, $backField] = $this->_splitTarget((string)($row['linkBack'] ?? ''));
+
+            $resolved[$fieldKey] = [
+                'id' => $result['id'],
+                'targetType' => $result['type'],
+                'backType' => $backType,
+                'backField' => $backField,
+            ];
+        }
+
+        $rows = array_filter($rows, static fn($row): bool => !str_starts_with((string)$row['matchOn'], '@'));
+
+        if (!$rows) {
+            return ['resolved' => $resolved, 'blocked' => $blocked];
         }
 
         // Reuse Formie's own token resolution, so `{field:…}` and
@@ -381,8 +749,6 @@ class Beacon extends Crm
             array_intersect_key($mapping, $rows),
             $lookupFields
         );
-
-        $resolved = [];
 
         foreach ($rows as $fieldKey => $row) {
             $value = $values[$fieldKey] ?? null;
@@ -421,7 +787,7 @@ class Beacon extends Crm
             ];
         }
 
-        return $resolved;
+        return ['resolved' => $resolved, 'blocked' => $blocked];
     }
 
     /**
@@ -556,7 +922,7 @@ class Beacon extends Crm
      * default handler shows only the outer message, which is always the
      * unhelpful "Oh shoot! An unknown error occurred."
      */
-    private function _logApiFailure(Throwable $e, string $method, string $endpoint, array $payload): void
+    private function _logApiFailure(Throwable $e, string $method, string $endpoint, array $payload, string $typeKey): void
     {
         $detail = $e->getMessage();
 
@@ -569,17 +935,17 @@ class Beacon extends Crm
         Integration::error($this, Craft::t('formie', 'Beacon rejected {method} {endpoint} for record type “{type}”. {detail} Payload: {payload}', [
             'method' => $method,
             'endpoint' => $endpoint,
-            'type' => (string)$this->entityType,
+            'type' => $typeKey,
             'detail' => $detail,
             'payload' => Json::encode($payload),
-        ]), true);
+        ]));
     }
 
     /**
      * Records the Beacon ID of every record written, so submissions can be
      * reconciled against the CRM later.
      */
-    private function _logSuccess(array $response, string $method): void
+    private function _logSuccess(array $response, string $method, string $typeKey): void
     {
         $entity = $response['entity'] ?? [];
         $id = $entity['id'] ?? null;
@@ -597,7 +963,7 @@ class Beacon extends Crm
 
         Integration::info($this, Craft::t('formie', 'Beacon record {action}: {type} #{id}', [
             'action' => $action,
-            'type' => (string)$this->entityType,
+            'type' => $typeKey,
             'id' => (string)$id,
         ]));
     }
@@ -634,13 +1000,23 @@ class Beacon extends Crm
                 continue;
             }
 
+            $options = $this->_getFieldOptions($field);
+            $linkData = $this->_getLinkData($field, $entityType, $typesByKey);
+
+            // A drop-down's own choices matter more than a payment value could,
+            // and a link takes a record ID, so only plain fields get the payment
+            // values as something to map.
+            if (!$options && !$linkData) {
+                $options = $this->_getPaymentOptions();
+            }
+
             $integrationFields[] = new IntegrationField([
                 'handle' => $field->key,
                 'name' => $field->label,
                 'type' => $this->_convertFieldType($field),
                 'sourceType' => $field->rawType,
-                'options' => $this->_getFieldOptions($field),
-                'data' => $this->_getLinkData($field, $entityType, $typesByKey),
+                'options' => $options,
+                'data' => $linkData,
             ]);
         }
 
@@ -712,7 +1088,7 @@ class Beacon extends Crm
             }
         }
 
-        return ['link' => ['match' => $match, 'back' => $back]];
+        return ['link' => ['match' => $match, 'back' => $back, 'targets' => $targetKeys]];
     }
 
     /**
@@ -755,12 +1131,12 @@ class Beacon extends Crm
     }
 
     /**
-     * The mapping rows for the currently selected record type, used for both
-     * validation and payload shaping.
+     * The mapping rows for a record type, used for both validation and payload
+     * shaping.
      */
-    private function _getSelectedTypeFields(bool $allowFetch = false): array
+    private function _getTypeFields(?string $typeKey, bool $allowFetch = false): array
     {
-        if (!$this->entityType) {
+        if (!$typeKey) {
             return [];
         }
 
@@ -791,7 +1167,7 @@ class Beacon extends Crm
             return [];
         }
 
-        $entityType = ArrayHelper::firstWhere($entityTypes, 'id', $this->entityType);
+        $entityType = ArrayHelper::firstWhere($entityTypes, 'id', $typeKey);
 
         return $entityType['fields'] ?? [];
     }

@@ -24,6 +24,8 @@ features:
     details: Names, emails, phone numbers, drop-downs, record links and currency amounts are all converted into the exact JSON Beacon expects.
   - title: Records linked by name
     details: Map the church someone types into a proper link to that Organisation, looking it up — or creating it — before the record is sent.
+  - title: Several records at once
+    details: Write a person, their event booking and their payment from one submission, each linked to the one before.
 ---
 
 ## What it is
@@ -57,6 +59,10 @@ there.
 - **Records linked by name.** A form collects a church name; Beacon wants a
   record ID. The plugin looks it up, optionally creates it, and can add the new
   record to a list on the other side. See [Linking records](/linking-records).
+- **Several records per submission.** A person, an event attendee and a
+  payment can all be written from one form, in order, with each linked to the
+  records before it, and payment details mappable into any of them. See
+  [Multiple records](/multiple-records).
 - **Opt-in support.** Use Formie's opt-in field so data is only sent when
   someone actually consents.
 
@@ -68,6 +74,8 @@ there.
 - Worried about duplicates? See
   [Creating and updating records](/creating-and-updating).
 - Linking to a church, branch or city? See [Linking records](/linking-records).
+- Writing a person, a booking and a payment from one form? See
+  [Multiple records](/multiple-records).
 - Something not saving? See [Troubleshooting](/troubleshooting).
 
 ::: warning Beacon workflows can fire on API writes

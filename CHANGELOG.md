@@ -1,5 +1,22 @@
 # Release Notes for Formie Beacon CRM Integration
 
+## 1.4.0 - 2026-10-23
+
+### Added
+- **Additional Records.** One submission can now write several records, such as a Person, an Event attendee and a Payment. The existing settings are the main record; below them, **Additional Records** adds more, each with its own record type, field mapping, fixed values, linked records and optional upsert. They are written in order after the main record.
+- **Record from this submission.** In Linked Records, **Match On** now also offers the main record and every additional record above the current one, so an attendee can link to the person written just before it. Nothing is looked up, so **Look Up From** can stay empty.
+- **Payment values.** Plain fields can be mapped from the submission's payment: amount, currency, reference, status, date and provider. They are shaped like any other value, so an amount mapped to a currency field arrives as a currency.
+- **Only If Payment Succeeded**, on each record, to write it only when the submission has a successful payment.
+
+### Changed
+- A record that fails no longer stops the rest. Records that link to it are skipped; the others are still written, and the integration is reported as failed. A record skipped on purpose, such as a payment record with no payment, is not a failure.
+- Log messages for a failed or empty record now say which record they are about.
+
+### Notes
+- Forms saved before this release need no changes. The main record's settings are stored exactly where they were.
+- Retrying a submission writes every record again. Turn on **Update Existing Records** for the main record so a retry does not duplicate the person.
+- Settings cached before this release do not list payment values until you click **Refresh Integration**.
+
 ## 1.3.0 - 2026-08-17
 
 ### Added
